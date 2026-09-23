@@ -1,0 +1,7 @@
+# Re-randomise the parking lot and put the ego car back at a start pose.
+# Deterministic: the same seed always gives the same scenario.
+int64 seed
+---
+bool success
+string message
+int32[] empty_slot_ids
