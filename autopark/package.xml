@@ -5,7 +5,7 @@
   <version>0.1.0</version>
   <description>Vision-based autonomous parking stack: odometry, perception, tracking, planning, control.</description>
   <maintainer email="mahmudlawal75@gmail.com">mhvd</maintainer>
-  <license>TODO</license>
+  <license>MIT</license>
 
   <exec_depend>rclpy</exec_depend>
   <exec_depend>std_msgs</exec_depend>

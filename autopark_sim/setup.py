@@ -20,6 +20,6 @@ setup(
     maintainer='mhvd',
     maintainer_email='mahmudlawal75@gmail.com',
     description='Webots parking-row world, vehicle interface and ground-truth supervisor',
-    license='TODO',
+    license='MIT',
     entry_points={'console_scripts': []},
 )

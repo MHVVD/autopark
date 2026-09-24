@@ -18,7 +18,7 @@ setup(
     maintainer='mhvd',
     maintainer_email='mahmudlawal75@gmail.com',
     description='Vision-based autonomous parking stack',
-    license='TODO',
+    license='MIT',
     entry_points={
         'console_scripts': [
             'odometry = autopark.odometry_node:main',
