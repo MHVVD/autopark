@@ -1,4 +1,5 @@
-"""Simulation + the autonomy stack (odometry, bird's-eye view, slot detector, slot tracker).
+"""Simulation + the autonomy stack (odometry, bird's-eye view, slot detector, slot tracker,
+planner).
 
 Args (passed through to autopark_sim/sim.launch.py): seed, gui, mode
   heading_source  imu | steering   odometry heading source   default imu
@@ -10,14 +11,19 @@ Args (passed through to autopark_sim/sim.launch.py): seed, gui, mode
   noise_yaw_deg   deg              injected detection noise (heading std)             default 0
   noise_dropout   0..1             probability of dropping a detected slot            default 0
   noise_false     per frame        mean number of false slots per frame               default 0
+  planner         true | false     run the planner (/parking/plan service)            default true
 The tracker always reads /slots/detections_noisy (a pass-through when all noise is 0) and is
 told the injected noise level (extra_pos_std / extra_yaw_std_deg).
+
+OPENBLAS_NUM_THREADS=1: numpy's OpenBLAS otherwise keeps extra threads spinning after every
+small matrix call (measured: the tracker used 3x the CPU for the same speed, about two cores
+in total), which starved the rest of the stack.
 """
 import os
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
+from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, SetEnvironmentVariable
 from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
@@ -53,6 +59,9 @@ def generate_launch_description():
                                 'extra_pos_std': LaunchConfiguration('noise_pos'),
                                 'extra_yaw_std_deg': LaunchConfiguration('noise_yaw_deg')}],
                    condition=IfCondition(LaunchConfiguration('tracker')))
+    planner = Node(package='autopark', executable='planner', output='screen',
+                   parameters=[{'use_sim_time': True}],
+                   condition=IfCondition(LaunchConfiguration('planner')))
     return LaunchDescription([
         DeclareLaunchArgument('seed', default_value='0'),
         DeclareLaunchArgument('gui', default_value='true'),
@@ -66,10 +75,13 @@ def generate_launch_description():
         DeclareLaunchArgument('noise_yaw_deg', default_value='0.0'),
         DeclareLaunchArgument('noise_dropout', default_value='0.0'),
         DeclareLaunchArgument('noise_false', default_value='0.0'),
+        DeclareLaunchArgument('planner', default_value='true'),
+        SetEnvironmentVariable('OPENBLAS_NUM_THREADS', '1'),
         sim,
         odometry,
         bev,
         detector,
         noise,
         tracker,
+        planner,
     ])

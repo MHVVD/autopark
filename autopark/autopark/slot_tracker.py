@@ -32,6 +32,9 @@ from dataclasses import dataclass, field
 import numpy as np
 from scipy.optimize import linear_sum_assignment
 
+from autopark import slot_codec as sc
+from autopark.bev import BevGrid
+
 CHI2_3_999 = 16.27      # 99.9 % gate, 3 dof
 
 
@@ -43,6 +46,26 @@ def meas_std(r):
     """Detector error model (1 sigma) vs entrance range r (m) from the car centre, fitted
     conservatively to the milestone 3 test set: (position m, heading rad)."""
     return 0.005 + 0.0025 * r, math.radians(0.3 + 0.04 * r)
+
+
+_BEV_RES = BevGrid().res
+CAR_CENTRE_X = 1.35     # m ahead of the rear axle (base_link)
+VIEW_MARGIN = 1.5       # m inside the BEV border (both entrance corners visible)
+VIEW_RANGE = 9.0        # m from the car centre
+
+
+def in_view(pose, x, y, margin=VIEW_MARGIN, view_range=VIEW_RANGE):
+    """Whether a slot entrance at (x, y) (same frame as `pose`, the rear-axle pose) is inside
+    the detector's reliable view: within `view_range` of the car centre and at least `margin`
+    inside the BEV input crop."""
+    c, s = math.cos(pose[2]), math.sin(pose[2])
+    dx, dy = x - pose[0], y - pose[1]
+    gx, gy = c * dx + s * dy, -s * dx + c * dy
+    if math.hypot(gx - CAR_CENTRE_X, gy) > view_range:
+        return False
+    col, row = sc.ground_to_input(gx, gy)
+    m = margin / _BEV_RES
+    return m <= col < sc.INPUT - m and m <= row < sc.INPUT - m
 
 
 def vacancy_weight(r):

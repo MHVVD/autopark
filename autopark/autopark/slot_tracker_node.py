@@ -12,7 +12,6 @@ model, e.g. when noise is injected), view_margin, view_range.
 """
 import math
 
-import numpy as np
 import rclpy
 from autopark_msgs.msg import ParkingSlot, ParkingSlotArray
 from cv_bridge import CvBridge
@@ -25,10 +24,9 @@ from std_msgs.msg import Int64
 
 from autopark import slot_codec as sc
 from autopark.odometry import compose, inverse, yaw_from_quaternion
-from autopark.slot_tracker import Detection, SlotTracker
+from autopark.slot_tracker import CAR_CENTRE_X, VIEW_MARGIN, VIEW_RANGE, Detection, SlotTracker, in_view
 from autopark.slot_viz import draw_slots
 
-CAR_CENTRE_X = 1.35
 STEP_MS = 20
 
 
@@ -42,8 +40,8 @@ class SlotTrackerNode(Node):
         self.declare_parameter('detections_topic', '/slots/detections')
         self.declare_parameter('extra_pos_std', 0.0)
         self.declare_parameter('extra_yaw_std_deg', 0.0)
-        self.declare_parameter('view_margin', 1.5)    # m inside the BEV border (both corners visible)
-        self.declare_parameter('view_range', 9.0)     # m from the car centre
+        self.declare_parameter('view_margin', VIEW_MARGIN)
+        self.declare_parameter('view_range', VIEW_RANGE)
         p = self.get_parameter
         self.tracker = SlotTracker(extra_pos_std=p('extra_pos_std').value,
                                    extra_yaw_std=math.radians(p('extra_yaw_std_deg').value))
@@ -88,16 +86,7 @@ class SlotTrackerNode(Node):
 
     def in_view_fn(self, pose):
         """Whether an odom-frame point is inside the detector's view from `pose`."""
-        inv = inverse(pose)
-        m = self.view_margin / 0.04
-
-        def in_view(x, y):
-            gx, gy, _ = compose(inv, (x, y, 0.0))
-            if math.hypot(gx - CAR_CENTRE_X, gy) > self.view_range:
-                return False
-            col, row = sc.ground_to_input(gx, gy)
-            return m <= col < sc.INPUT - m and m <= row < sc.INPUT - m
-        return in_view
+        return lambda x, y: in_view(pose, x, y, self.view_margin, self.view_range)
 
     def on_dets(self, msg):
         pose = self.pose_at(msg.header.stamp)
