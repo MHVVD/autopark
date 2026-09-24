@@ -12,7 +12,7 @@
 # corners[0] = entrance left, corners[1] = entrance right (seen from the aisle, looking into
 # the slot), corners[2] = back right, corners[3] = back left.
 
-int32 id                      # ground-truth id; -1 if unknown (detections)
+int32 id                      # ground-truth slot id, or track id (/slots/tracked); -1 for raw detections
 geometry_msgs/Point[4] corners
 geometry_msgs/Pose2D entrance # centre of the entrance line + heading into the slot
 float64 width                 # m, between side-line centres
