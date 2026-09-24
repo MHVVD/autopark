@@ -32,8 +32,7 @@ TexturedBackgroundLight {
 }
 Floor {
   size 100 100
-  tileSize 4 4
-  appearance Asphalt { }
+  tileSize 1 1
 }
 DEF LINES Solid {
   name "painted lines"

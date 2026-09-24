@@ -1,13 +1,15 @@
-"""Simulation + the autonomy stack (milestone 1: odometry only).
+"""Simulation + the autonomy stack (odometry, bird's-eye view).
 
 Args (passed through to autopark_sim/sim.launch.py): seed, gui, mode
   heading_source  imu | steering   odometry heading source   default imu
+  bev             true | false     run the BEV node          default true
 """
 import os
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
+from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
@@ -24,11 +26,15 @@ def generate_launch_description():
     odometry = Node(package='autopark', executable='odometry', output='screen',
                     parameters=[{'use_sim_time': True,
                                  'heading_source': LaunchConfiguration('heading_source')}])
+    bev = Node(package='autopark', executable='bev', output='screen',
+               parameters=[{'use_sim_time': True}], condition=IfCondition(LaunchConfiguration('bev')))
     return LaunchDescription([
         DeclareLaunchArgument('seed', default_value='0'),
         DeclareLaunchArgument('gui', default_value='true'),
         DeclareLaunchArgument('mode', default_value='realtime'),
         DeclareLaunchArgument('heading_source', default_value='imu'),
+        DeclareLaunchArgument('bev', default_value='true'),
         sim,
         odometry,
+        bev,
     ])

@@ -1,6 +1,7 @@
 """Webots parking-row simulation: ego car + ground-truth supervisor.
 
 Args:
+  world  parking_row | calibration                                     default parking_row
   seed   int                 scenario seed applied at start-up          default 0
   gui    true | false        false = minimised, 3D view not rendered    default true
   mode   realtime | fast                                                default realtime
@@ -29,7 +30,8 @@ def _write(name, text):
 
 def launch_setup(context):
     seed = int(LaunchConfiguration('seed').perform(context))
-    world = os.path.join(get_package_share_directory('autopark_sim'), 'worlds', 'parking_row.wbt')
+    world = os.path.join(get_package_share_directory('autopark_sim'), 'worlds',
+                         LaunchConfiguration('world').perform(context) + '.wbt')
 
     # ros2_supervisor=True: the Ros2Supervisor node publishes /clock.
     webots = WebotsLauncher(world=world, gui=LaunchConfiguration('gui'),
@@ -59,6 +61,7 @@ def launch_setup(context):
 
 def generate_launch_description():
     return LaunchDescription([
+        DeclareLaunchArgument('world', default_value='parking_row'),
         DeclareLaunchArgument('seed', default_value='0'),
         DeclareLaunchArgument('gui', default_value='true'),
         DeclareLaunchArgument('mode', default_value='realtime'),

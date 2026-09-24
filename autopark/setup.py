@@ -24,6 +24,9 @@ setup(
             'odometry = autopark.odometry_node:main',
             'drive_test = autopark.drive_test:main',
             'odom_eval = autopark.odom_eval:main',
+            'calibrate_masks = autopark.calibrate_masks:main',
+            'bev = autopark.bev_node:main',
+            'bev_eval = autopark.bev_eval:main',
         ],
     },
 )
