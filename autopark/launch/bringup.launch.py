@@ -1,10 +1,17 @@
-"""Simulation + the autonomy stack (odometry, bird's-eye view, slot detector).
+"""Simulation + the autonomy stack (odometry, bird's-eye view, slot detector, slot tracker).
 
 Args (passed through to autopark_sim/sim.launch.py): seed, gui, mode
   heading_source  imu | steering   odometry heading source   default imu
   bev             true | false     run the BEV node          default true
   detector        true | false     run the slot detector     default true
   model           path             detector weights          default ~/autopark_models/slotnet.pt
+  tracker         true | false     run the slot tracker      default true
+  noise_pos       m                injected detection noise (entrance position std)   default 0
+  noise_yaw_deg   deg              injected detection noise (heading std)             default 0
+  noise_dropout   0..1             probability of dropping a detected slot            default 0
+  noise_false     per frame        mean number of false slots per frame               default 0
+The tracker always reads /slots/detections_noisy (a pass-through when all noise is 0) and is
+told the injected noise level (extra_pos_std / extra_yaw_std_deg).
 """
 import os
 
@@ -33,6 +40,19 @@ def generate_launch_description():
     detector = Node(package='autopark', executable='slot_detector', output='screen',
                     parameters=[{'use_sim_time': True, 'model': LaunchConfiguration('model')}],
                     condition=IfCondition(LaunchConfiguration('detector')))
+    noise = Node(package='autopark', executable='detection_noise', output='screen',
+                 parameters=[{'use_sim_time': True,
+                              'pos_std': LaunchConfiguration('noise_pos'),
+                              'yaw_std_deg': LaunchConfiguration('noise_yaw_deg'),
+                              'dropout': LaunchConfiguration('noise_dropout'),
+                              'false_per_frame': LaunchConfiguration('noise_false')}],
+                 condition=IfCondition(LaunchConfiguration('tracker')))
+    tracker = Node(package='autopark', executable='slot_tracker', output='screen',
+                   parameters=[{'use_sim_time': True,
+                                'detections_topic': '/slots/detections_noisy',
+                                'extra_pos_std': LaunchConfiguration('noise_pos'),
+                                'extra_yaw_std_deg': LaunchConfiguration('noise_yaw_deg')}],
+                   condition=IfCondition(LaunchConfiguration('tracker')))
     return LaunchDescription([
         DeclareLaunchArgument('seed', default_value='0'),
         DeclareLaunchArgument('gui', default_value='true'),
@@ -41,8 +61,15 @@ def generate_launch_description():
         DeclareLaunchArgument('bev', default_value='true'),
         DeclareLaunchArgument('detector', default_value='true'),
         DeclareLaunchArgument('model', default_value=os.path.expanduser('~/autopark_models/slotnet.pt')),
+        DeclareLaunchArgument('tracker', default_value='true'),
+        DeclareLaunchArgument('noise_pos', default_value='0.0'),
+        DeclareLaunchArgument('noise_yaw_deg', default_value='0.0'),
+        DeclareLaunchArgument('noise_dropout', default_value='0.0'),
+        DeclareLaunchArgument('noise_false', default_value='0.0'),
         sim,
         odometry,
         bev,
         detector,
+        noise,
+        tracker,
     ])

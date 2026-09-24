@@ -7,6 +7,8 @@ Publishes (every simulation step, stamped with Webots time)
   /vehicle/state   ackermann_msgs/AckermannDriveStamped  measured speed (rear-wheel encoders)
                                                          and steering angle (steering joints)
   /imu             sensor_msgs/Imu                       gyro + accelerometer, frame base_link
+  /cam_<name>/image sensor_msgs/Image (bgra8)            every CAMERA_PERIOD_MS, stamped with the
+                                                         exact simulation time of the render
 
 The actuators are rate limited (acceleration, steering rate) and the car stops if no command
 arrives for CMD_TIMEOUT seconds. Optional sensor noise is set with <plugin> properties
@@ -17,8 +19,10 @@ import math
 import numpy as np
 import rclpy
 from ackermann_msgs.msg import AckermannDriveStamped
-from sensor_msgs.msg import Imu
+from sensor_msgs.msg import Image, Imu
 from std_msgs.msg import Int64
+
+from autopark_sim.descriptions import CAMERA_PERIOD_MS, CAMERAS, image_topic
 
 from autopark_sim.vehicle_model import (CMD_TIMEOUT, MAX_ACCEL, MAX_SPEED, MAX_STEER,
                                         MAX_STEER_RATE, ackermann_center_angle, clamp,
@@ -50,6 +54,13 @@ class VehiclePlugin:
         self.__enc_l, self.__enc_r = dev('left_rear_sensor'), dev('right_rear_sensor')
         self.__steer_l, self.__steer_r = dev('left_steer_sensor'), dev('right_steer_sensor')
         self.__gyro, self.__accel = dev('gyro'), dev('accelerometer')
+        self.__cams = []
+        for name in CAMERAS:
+            cam = self.__robot.getDevice(f'cam_{name}')
+            cam.enable(CAMERA_PERIOD_MS)
+            self.__cams.append((name, cam))
+        # sensors are sampled every period counted from the moment they were enabled
+        self.__cam_t0_ms = int(round(self.__robot.getTime() * 1000))
 
         self.__gyro_noise = float(properties.get('gyroNoise', 0.0))
         self.__gyro_bias = float(properties.get('gyroBias', 0.0))
@@ -73,6 +84,8 @@ class VehiclePlugin:
         self.__node.create_subscription(Int64, '/scenario/reset', self.__on_reset, 10)
         self.__state_pub = self.__node.create_publisher(AckermannDriveStamped, '/vehicle/state', 10)
         self.__imu_pub = self.__node.create_publisher(Imu, '/imu', 10)
+        self.__cam_pubs = {name: self.__node.create_publisher(Image, image_topic(name), 2)
+                           for name, _ in self.__cams}
 
     def __on_cmd(self, msg):
         d = msg.drive
@@ -88,9 +101,27 @@ class VehiclePlugin:
         self.__cmd_steer = self.__steer = 0.0
         self.__prev_enc = None
 
+    def __publish_cameras(self, t):
+        sec, nsec = _stamp(t)
+        for name, cam in self.__cams:
+            data = cam.getImage()
+            if not data:
+                continue
+            msg = Image()
+            msg.header.stamp.sec, msg.header.stamp.nanosec = sec, nsec
+            msg.header.frame_id = f'cam_{name}'
+            msg.width, msg.height = cam.getWidth(), cam.getHeight()
+            msg.encoding = 'bgra8'
+            msg.step = 4 * msg.width
+            msg.data = data
+            self.__cam_pubs[name].publish(msg)
+
     def step(self):
         rclpy.spin_once(self.__node, timeout_sec=0)
         t = self.__robot.getTime()
+        dt_ms = int(round(t * 1000)) - self.__cam_t0_ms
+        if dt_ms > 0 and dt_ms % CAMERA_PERIOD_MS == 0:
+            self.__publish_cameras(t)
 
         # Actuators
         target = self.__cmd_speed if t - self.__last_cmd <= CMD_TIMEOUT else 0.0

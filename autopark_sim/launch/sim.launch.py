@@ -17,8 +17,7 @@ from launch.substitutions import LaunchConfiguration
 from webots_ros2_driver.webots_controller import WebotsController
 from webots_ros2_driver.webots_launcher import WebotsLauncher
 
-from autopark_sim.descriptions import (CAMERAS, image_topic, supervisor_description,
-                                       vehicle_description, webots_image_topic)
+from autopark_sim.descriptions import supervisor_description, vehicle_description
 
 
 def _write(name, text):
@@ -40,7 +39,6 @@ def launch_setup(context):
         robot_name='ego_car',
         parameters=[{'robot_description': _write('autopark_ego_car.urdf', vehicle_description()),
                      'use_sim_time': True}],
-        remappings=[(webots_image_topic(c), image_topic(c)) for c in CAMERAS],
     )
     gt = WebotsController(
         robot_name='gt_supervisor',

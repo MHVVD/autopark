@@ -8,8 +8,8 @@ and reverses into it. Work in progress, built milestone by milestone.
 | 1. Simulation foundation: world, vehicle interface, ground truth, odometry | done |
 | 2. Bird's-eye view (camera calibration, IPM, stitching) | done |
 | 3. Slot detector (dataset from ground truth, PyTorch) | done |
-| 4. Slot tracker (Kalman filter) | next |
-| 5. Planner (Hybrid A* + Reeds-Shepp) | |
+| 4. Slot tracker (Kalman filter) | done |
+| 5. Planner (Hybrid A* + Reeds-Shepp) | next |
 | 6. Controller (Stanley fwd/rev) + parking manager | |
 | 7. Experiments, visualisation, write-up | |
 
@@ -27,10 +27,13 @@ and reverses into it. Work in progress, built milestone by milestone.
 | `/cmd_ackermann` | ackermann_msgs/AckermannDriveStamped | speed m/s (+fwd), steering rad (+left); rate limited, 0.5 s timeout |
 | `/vehicle/state` | ackermann_msgs/AckermannDriveStamped | speed from rear-wheel encoders, steering from steering joints, 50 Hz |
 | `/imu` | sensor_msgs/Imu | gyro + accelerometer, 50 Hz |
-| `/cam_{front,rear,left,right}/image` | sensor_msgs/Image | 640x640 equidistant fisheye, 189 deg, 10 Hz |
+| `/cam_{front,rear,left,right}/image` | sensor_msgs/Image | 640x640 equidistant fisheye, 189 deg, 10 Hz, stamped with the exact simulation time of the render |
 | `/bev/image` | sensor_msgs/Image | stitched bird's-eye view, 18 x 18 m at 4 cm/px, frame base_footprint |
 | `/slots/detections` | autopark_msgs/ParkingSlotArray | detected slots in base_footprint (entrance, heading, width, occupied, confidence) |
 | `/slots/debug_image` | sensor_msgs/Image | BEV with detections drawn |
+| `/slots/detections_noisy` | autopark_msgs/ParkingSlotArray | detections after optional injected noise (pass-through by default) |
+| `/slots/tracked` | autopark_msgs/ParkingSlotArray | confirmed slot tracks in odom: id, entrance, covariance, fused vacancy |
+| `/slots/tracked_image` | sensor_msgs/Image | BEV with the tracks drawn |
 | `/odom` + TF odom->base_link | nav_msgs/Odometry | Ackermann dead reckoning, heading from IMU (or steering) |
 | `/ground_truth/pose`, `/ground_truth/slots` | Odometry, ParkingSlotArray | evaluation/labels only, never used by the stack |
 | `/ground_truth/reset` | autopark_msgs/srv/ResetScenario | deterministic scenario from a seed |
@@ -79,6 +82,27 @@ test split uses the normal 1-3-empty scenarios. The splits never share a scenari
 `!pip install opencv-python-headless` and
 `!PYTHONPATH=. python -m autopark.train_slots --data slots_v1 --out slotnet.pt --workers 2`.
 Copy `slotnet.pt` back to `~/autopark_models/`.
+
+## Slot tracker
+
+One Kalman filter per slot on the entrance pose (x, y, heading) in the odom frame
+(`slot_tracker.py`). The measurement noise is the detector's error measured against range
+(0.5 cm + 0.25 cm/m, 0.3 deg + 0.04 deg/m) plus any injected noise; prediction adds odometry
+drift proportional to the distance driven. Association: Mahalanobis gate (chi2, 3 dof, 99.9 %)
++ linear assignment. Tracks are confirmed after 3 hits and only accumulate misses while the
+slot is predicted to be inside the detector's view, so slots are remembered when they leave
+the view during a manoeuvre. Vacancy is a log-odds filter whose weight falls with range
+(far-range vacancy is unreliable, see milestone 3).
+
+`ros2 run autopark track_eval` drives past the rows and back (using ground truth to steer)
+and scores detections and tracks against ground truth in the car frame. Detection noise for
+experiments: `ros2 launch autopark bringup.launch.py noise_pos:=0.2 noise_yaw_deg:=4
+noise_dropout:=0.2 noise_false:=0.3`.
+
+Camera timing: the vehicle plugin publishes the camera images itself, stamped with the
+simulation time of the render. webots_ros2's own camera publisher stamps with a ROS clock fed
+by /clock from another process; measured per frame, its stamps lagged the render by one step
+88 % of the time and by 0 or 2 steps otherwise (2-3 cm of error at 1.2 m/s).
 
 ## Run
 
