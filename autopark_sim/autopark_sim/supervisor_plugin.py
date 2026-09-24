@@ -135,6 +135,7 @@ class GroundTruthSupervisor:
             m.entrance.x, m.entrance.y, m.entrance.theta = s.entrance_x, s.entrance_y, s.heading
             m.width, m.depth = s.width, s.depth
             m.occupied = s.id in self.__occupied
+            m.vacancy = 0.0 if m.occupied else 1.0
             m.confidence = 1.0
             msg.slots.append(m)
         return msg

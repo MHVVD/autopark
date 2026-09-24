@@ -31,6 +31,9 @@ setup(
             'train_slots = autopark.train_slots:main',
             'eval_slots = autopark.eval_slots:main',
             'slot_detector = autopark.slot_detector_node:main',
+            'slot_tracker = autopark.slot_tracker_node:main',
+            'detection_noise = autopark.detection_noise:main',
+            'track_eval = autopark.track_eval:main',
         ],
     },
 )

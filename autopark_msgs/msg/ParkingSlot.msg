@@ -18,5 +18,6 @@ geometry_msgs/Pose2D entrance # centre of the entrance line + heading into the s
 float64 width                 # m, between side-line centres
 float64 depth                 # m, entrance to back-line centre
 bool occupied
+float32 vacancy               # probability that the slot is free (0..1); -1 if unknown
 float32 confidence            # 1.0 for ground truth
 float64[9] covariance         # row-major 3x3 of (entrance.x, entrance.y, entrance.theta); zeros if unknown

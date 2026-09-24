@@ -158,7 +158,7 @@ def test_committed_worlds_match_generator(name):
 
 def test_descriptions_are_valid_xml():
     v = ET.fromstring(vehicle_description({'gyroNoise': 0.01}))
-    assert len(v.findall('webots/device')) == 4
+    assert len(v.findall('webots/device')) == 0   # cameras are published by VehiclePlugin
     assert v.find('webots/plugin/gyroNoise').text == '0.01'
     s = ET.fromstring(supervisor_description(7))
     assert s.find('webots/plugin/seed').text == '7'

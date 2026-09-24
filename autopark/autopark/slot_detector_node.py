@@ -35,6 +35,7 @@ def to_msg(slot):
     m.depth = sc.NOMINAL_DEPTH
     vac = 0.0 if math.isnan(slot.vacancy) else slot.vacancy
     m.occupied = bool(vac < 0.5)
+    m.vacancy = -1.0 if math.isnan(slot.vacancy) else float(slot.vacancy)
     m.confidence = float(slot.score)
     return m
 
