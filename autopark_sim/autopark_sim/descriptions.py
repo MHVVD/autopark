@@ -4,7 +4,9 @@ Camera note: webots_ros2 publishes when `time - last < 1/updateRate` is false. W
 10 Hz that float comparison sometimes fails (0.7 - 0.6 = 0.0999...), dropping to ~8.9 Hz;
 requesting 10.5 Hz gives exactly one frame every 5th 20 ms step, i.e. 10 Hz (measured).
 """
-CAMERAS = ['front', 'rear', 'left', 'right']
+from autopark_sim.rig import CAMERAS as _RIG
+
+CAMERAS = [c.name for c in _RIG]
 CAMERA_UPDATE_RATE = 10.5  # -> 10 Hz actual, see above
 
 

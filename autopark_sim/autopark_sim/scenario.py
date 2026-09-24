@@ -64,10 +64,16 @@ class Scenario:
     ego: tuple = (0.0, 0.0, 0.0)   # x, y, yaw of the ego rear axle
 
 
+EMPTY_LOT_SEED = -1  # special seed: no parked cars (calibration / evaluation of line geometry)
+
+
 def make_scenario(seed, n_empty=(1, 3)):
-    """Random but reproducible scenario. n_empty: inclusive range of empty slots."""
-    rng = np.random.default_rng(seed)
+    """Random but reproducible scenario. n_empty: inclusive range of empty slots.
+    seed == EMPTY_LOT_SEED gives an empty lot with the ego at its nominal start pose."""
     all_slots = slots()
+    if seed == EMPTY_LOT_SEED:
+        return Scenario(seed, [], [s.id for s in all_slots], (-15.5, 0.0, 0.0))
+    rng = np.random.default_rng(seed)
     k = int(rng.integers(n_empty[0], n_empty[1] + 1))
     empty = sorted(int(i) for i in rng.choice(len(all_slots), size=k, replace=False))
 

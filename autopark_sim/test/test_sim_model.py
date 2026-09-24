@@ -6,8 +6,8 @@ import pytest
 
 from autopark_sim import lot
 from autopark_sim.descriptions import supervisor_description, vehicle_description
-from autopark_sim.generate_world import world_string
-from autopark_sim.scenario import CAR_MODELS, make_scenario
+from autopark_sim.generate_world import WORLDS, world_string
+from autopark_sim.scenario import CAR_MODELS, EMPTY_LOT_SEED, make_scenario
 from autopark_sim.vehicle_model import (WHEEL_BASE, ackermann_center_angle, encoder_speed,
                                         rate_limit, to_webots)
 
@@ -105,6 +105,11 @@ def test_scenario_valid(seed):
     assert x < lot.ROW_X0 - 2 and abs(y) < 1.0
 
 
+def test_empty_lot_scenario():
+    sc = make_scenario(EMPTY_LOT_SEED)
+    assert sc.parked == [] and len(sc.empty_slot_ids) == 16
+
+
 # ---------- vehicle model ----------
 
 def test_rate_limit():
@@ -138,9 +143,10 @@ def test_encoder_speed():
 
 # ---------- generated files ----------
 
-def test_committed_world_matches_generator():
-    with open(os.path.join(HERE, '..', 'worlds', 'parking_row.wbt')) as f:
-        assert f.read() == world_string(), 'run: python3 -m autopark_sim.generate_world ...'
+@pytest.mark.parametrize('name', sorted(WORLDS))
+def test_committed_worlds_match_generator(name):
+    with open(os.path.join(HERE, '..', 'worlds', name)) as f:
+        assert f.read() == world_string(WORLDS[name]), 'run: python3 -m autopark_sim.generate_world worlds'
 
 
 def test_descriptions_are_valid_xml():
