@@ -65,11 +65,15 @@ class Scenario:
 
 
 EMPTY_LOT_SEED = -1  # special seed: no parked cars (calibration / evaluation of line geometry)
+DATASET_SEEDS = 10000  # seeds >= this have 3..10 empty slots (balanced detector training data)
 
 
-def make_scenario(seed, n_empty=(1, 3)):
-    """Random but reproducible scenario. n_empty: inclusive range of empty slots.
+def make_scenario(seed, n_empty=None):
+    """Random but reproducible scenario. n_empty: inclusive range of empty slots; default
+    (1, 3), or (3, 10) for seeds >= DATASET_SEEDS.
     seed == EMPTY_LOT_SEED gives an empty lot with the ego at its nominal start pose."""
+    if n_empty is None:
+        n_empty = (3, 10) if seed >= DATASET_SEEDS else (1, 3)
     all_slots = slots()
     if seed == EMPTY_LOT_SEED:
         return Scenario(seed, [], [s.id for s in all_slots], (-15.5, 0.0, 0.0))

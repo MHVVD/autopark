@@ -1,8 +1,10 @@
-"""Simulation + the autonomy stack (odometry, bird's-eye view).
+"""Simulation + the autonomy stack (odometry, bird's-eye view, slot detector).
 
 Args (passed through to autopark_sim/sim.launch.py): seed, gui, mode
   heading_source  imu | steering   odometry heading source   default imu
   bev             true | false     run the BEV node          default true
+  detector        true | false     run the slot detector     default true
+  model           path             detector weights          default ~/autopark_models/slotnet.pt
 """
 import os
 
@@ -28,13 +30,19 @@ def generate_launch_description():
                                  'heading_source': LaunchConfiguration('heading_source')}])
     bev = Node(package='autopark', executable='bev', output='screen',
                parameters=[{'use_sim_time': True}], condition=IfCondition(LaunchConfiguration('bev')))
+    detector = Node(package='autopark', executable='slot_detector', output='screen',
+                    parameters=[{'use_sim_time': True, 'model': LaunchConfiguration('model')}],
+                    condition=IfCondition(LaunchConfiguration('detector')))
     return LaunchDescription([
         DeclareLaunchArgument('seed', default_value='0'),
         DeclareLaunchArgument('gui', default_value='true'),
         DeclareLaunchArgument('mode', default_value='realtime'),
         DeclareLaunchArgument('heading_source', default_value='imu'),
         DeclareLaunchArgument('bev', default_value='true'),
+        DeclareLaunchArgument('detector', default_value='true'),
+        DeclareLaunchArgument('model', default_value=os.path.expanduser('~/autopark_models/slotnet.pt')),
         sim,
         odometry,
         bev,
+        detector,
     ])
