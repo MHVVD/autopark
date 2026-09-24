@@ -6,8 +6,8 @@ import pytest
 from autopark.slot_tracker import (CHI2_3_999, Detection, SlotTracker, meas_std, vacancy_weight,
                                    wrap)
 
-ALWAYS = lambda x, y: True     # noqa: E731
-NEVER = lambda x, y: False     # noqa: E731
+ALWAYS = lambda x, y, th=None: True     # noqa: E731
+NEVER = lambda x, y, th=None: False     # noqa: E731
 
 
 def det(x, y, th=math.pi / 2, vac=-1.0, rng=5.0, width=2.6):
@@ -148,3 +148,13 @@ def test_tracks_that_converge_are_merged():
     tr.tracks[1].hits = 1
     tr.update([], 10, NEVER)
     assert len(tr.tracks) == 1 and tr.tracks[0].hits >= 3
+
+
+def test_view_angle_validity():
+    from autopark.slot_tracker import heading_valid, in_view
+    assert heading_valid(math.pi / 2) and heading_valid(-math.pi / 2 + 0.3)
+    assert not heading_valid(0.0) and not heading_valid(math.pi / 4)
+    # a slot 3.5 m to the left of the car: in view when perpendicular, not when the car has turned
+    assert in_view((0.0, 0.0, 0.0), 1.35, 3.5, theta=math.pi / 2)
+    assert not in_view((0.0, 0.0, math.radians(45)), 1.35, 3.5, theta=math.pi / 2)
+    assert in_view((0.0, 0.0, 0.0), 1.35, 3.5)          # without a heading: position only

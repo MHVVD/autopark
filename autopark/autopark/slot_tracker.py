@@ -13,7 +13,8 @@ gated at chi2(3 dof, 99.9 %) and solved as a linear assignment.
 
 Track life: a new detection starts a *tentative* track; it is *confirmed* after `confirm_hits`
 hits. A track only accumulates misses while its entrance is predicted to be *in view* of the
-detector (`in_view` callback), so a slot that leaves the field of view during a manoeuvre is
+detector (`in_view` callback, which includes the detector's valid range of view angles), so a
+slot that leaves the field of view or is seen from an untrained angle during a manoeuvre is
 remembered. Tentative tracks die after `max_misses_tentative` misses in view, confirmed ones
 after `max_misses_confirmed`.
 
@@ -52,12 +53,25 @@ _BEV_RES = BevGrid().res
 CAR_CENTRE_X = 1.35     # m ahead of the rear axle (base_link)
 VIEW_MARGIN = 1.5       # m inside the BEV border (both entrance corners visible)
 VIEW_RANGE = 9.0        # m from the car centre
+# The detector was trained on views from the aisle (car heading within ~20 deg of the aisle,
+# i.e. slots nearly perpendicular to the car). Outside that it finds nothing or is biased, so
+# such views neither count as observations nor as misses.
+VIEW_YAW_TOL = math.radians(20.0)
 
 
-def in_view(pose, x, y, margin=VIEW_MARGIN, view_range=VIEW_RANGE):
+def heading_valid(rel_heading, tol=VIEW_YAW_TOL):
+    """Whether a slot heading relative to the car (rad) is in the detector's trained range:
+    within `tol` of perpendicular (either side)."""
+    return abs(abs((rel_heading + math.pi) % (2 * math.pi) - math.pi) - math.pi / 2) <= tol
+
+
+def in_view(pose, x, y, margin=VIEW_MARGIN, view_range=VIEW_RANGE, theta=None, yaw_tol=VIEW_YAW_TOL):
     """Whether a slot entrance at (x, y) (same frame as `pose`, the rear-axle pose) is inside
-    the detector's reliable view: within `view_range` of the car centre and at least `margin`
-    inside the BEV input crop."""
+    the detector's reliable view: within `view_range` of the car centre, at least `margin`
+    inside the BEV input crop, and (if the slot heading `theta` is given) seen from within the
+    detector's trained range of relative headings."""
+    if theta is not None and not heading_valid(theta - pose[2], yaw_tol):
+        return False
     c, s = math.cos(pose[2]), math.sin(pose[2])
     dx, dy = x - pose[0], y - pose[1]
     gx, gy = c * dx + s * dy, -s * dx + c * dy
@@ -148,8 +162,8 @@ class SlotTracker:
 
     # ---------------------------------------------------------------- update
     def update(self, detections, stamp, in_view):
-        """detections: list[Detection] (odom frame). in_view(x, y) -> bool: whether a slot
-        entrance at odom (x, y) is inside the detector's field of view right now."""
+        """detections: list[Detection] (odom frame). in_view(x, y, theta) -> bool: whether a slot
+        with entrance at odom (x, y) and heading theta is inside the detector's view right now."""
         for d in detections:
             if d.R is None:
                 d.R = self.R(d.range)
@@ -176,7 +190,7 @@ class SlotTracker:
         survivors = []
         for i, t in enumerate(self.tracks):
             seen_nearby = any(math.hypot(t.x[0] - d.x, t.x[1] - d.y) < self.min_separation for d in unmatched)
-            if i not in matched_t and not seen_nearby and in_view(t.x[0], t.x[1]):
+            if i not in matched_t and not seen_nearby and in_view(t.x[0], t.x[1], t.x[2]):
                 t.misses += 1
             limit = self.max_misses_confirmed if t.confirmed else self.max_misses_tentative
             if t.misses < limit:

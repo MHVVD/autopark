@@ -103,7 +103,7 @@ class PlannerNode(Node):
         target = self.choose(specs, req.slot_id, start)
         if target is None:
             res.success = False
-            res.message = (f'slot {req.slot_id} is not a tracked selectable-vacant slot' if req.slot_id >= 0
+            res.message = (f'slot {req.slot_id} is not tracked' if req.slot_id >= 0
                            else 'no selectable vacant slot')
             return res
         goal = pg.goal_pose(target, self.car)
@@ -140,9 +140,12 @@ class PlannerNode(Node):
 
     @staticmethod
     def choose(specs, slot_id, start):
+        """slot_id >= 0: that tracked slot, whatever its current vacancy (choosing a vacant slot
+        is the caller's job; while the car reverses into its slot, the slot's vacancy estimate
+        drops because the car itself is in it). -1: the nearest selectable-vacant slot."""
         vac = [s for s in specs if s.vacant]
         if slot_id >= 0:
-            return next((s for s in vac if s.id == slot_id), None)
+            return next((s for s in specs if s.id == slot_id), None)
         if not vac:
             return None
         return min(vac, key=lambda s: math.hypot(*(np.subtract(pg.goal_pose(s)[:2], start[:2]))))

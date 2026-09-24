@@ -33,6 +33,7 @@ def test_flip_targets_equals_mirrored_geometry(axis, pose):
 
 
 def test_network_shapes_and_loss_backprop():
+    torch.manual_seed(0)       # random input: a near-zero direction vector cannot be normalised
     net = SlotNet()
     x = torch.randn(2, 3, sc.INPUT, sc.INPUT)
     out = net(x)

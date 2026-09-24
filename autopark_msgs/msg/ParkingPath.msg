@@ -6,6 +6,9 @@
 # and changes gear.
 
 std_msgs/Header header
+uint32 plan_id                   # set by the parking manager: a new id restarts the controller
+uint32 revision                  # same plan_id, higher revision: a small correction of the same
+                                 # path (same samples moved slightly); the controller keeps its progress
 int32 slot_id                    # track id of the target slot (/slots/tracked)
 geometry_msgs/Pose2D goal        # final rear-axle pose: centred in the slot, facing out
 geometry_msgs/Pose2D[] poses

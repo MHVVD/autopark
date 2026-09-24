@@ -24,7 +24,8 @@ from std_msgs.msg import Int64
 
 from autopark import slot_codec as sc
 from autopark.odometry import compose, inverse, yaw_from_quaternion
-from autopark.slot_tracker import CAR_CENTRE_X, VIEW_MARGIN, VIEW_RANGE, Detection, SlotTracker, in_view
+from autopark.slot_tracker import (CAR_CENTRE_X, VIEW_MARGIN, VIEW_RANGE, Detection, SlotTracker, heading_valid,
+                                   in_view)
 from autopark.slot_viz import draw_slots
 
 STEP_MS = 20
@@ -86,7 +87,7 @@ class SlotTrackerNode(Node):
 
     def in_view_fn(self, pose):
         """Whether an odom-frame point is inside the detector's view from `pose`."""
-        return lambda x, y: in_view(pose, x, y, self.view_margin, self.view_range)
+        return lambda x, y, th=None: in_view(pose, x, y, self.view_margin, self.view_range, th)
 
     def on_dets(self, msg):
         pose = self.pose_at(msg.header.stamp)
@@ -99,6 +100,8 @@ class SlotTrackerNode(Node):
 
         dets = []
         for s in msg.slots:
+            if not heading_valid(s.entrance.theta):
+                continue            # seen from an angle the detector was not trained for
             x, y, th = compose(pose, (s.entrance.x, s.entrance.y, s.entrance.theta))
             rng = math.hypot(s.entrance.x - CAR_CENTRE_X, s.entrance.y)
             dets.append(Detection(x, y, th, s.width, s.vacancy, rng))
