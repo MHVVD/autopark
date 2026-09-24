@@ -7,8 +7,8 @@ and reverses into it. Work in progress, built milestone by milestone.
 |---|---|
 | 1. Simulation foundation: world, vehicle interface, ground truth, odometry | done |
 | 2. Bird's-eye view (camera calibration, IPM, stitching) | done |
-| 3. Slot detector (dataset from ground truth, PyTorch) | next |
-| 4. Slot tracker (Kalman filter) | |
+| 3. Slot detector (dataset from ground truth, PyTorch) | done |
+| 4. Slot tracker (Kalman filter) | next |
 | 5. Planner (Hybrid A* + Reeds-Shepp) | |
 | 6. Controller (Stanley fwd/rev) + parking manager | |
 | 7. Experiments, visualisation, write-up | |
@@ -29,6 +29,8 @@ and reverses into it. Work in progress, built milestone by milestone.
 | `/imu` | sensor_msgs/Imu | gyro + accelerometer, 50 Hz |
 | `/cam_{front,rear,left,right}/image` | sensor_msgs/Image | 640x640 equidistant fisheye, 189 deg, 10 Hz |
 | `/bev/image` | sensor_msgs/Image | stitched bird's-eye view, 18 x 18 m at 4 cm/px, frame base_footprint |
+| `/slots/detections` | autopark_msgs/ParkingSlotArray | detected slots in base_footprint (entrance, heading, width, occupied, confidence) |
+| `/slots/debug_image` | sensor_msgs/Image | BEV with detections drawn |
 | `/odom` + TF odom->base_link | nav_msgs/Odometry | Ackermann dead reckoning, heading from IMU (or steering) |
 | `/ground_truth/pose`, `/ground_truth/slots` | Odometry, ParkingSlotArray | evaluation/labels only, never used by the stack |
 | `/ground_truth/reset` | autopark_msgs/srv/ResetScenario | deterministic scenario from a seed |
@@ -51,6 +53,32 @@ x forward, y left. All sensor messages are stamped with simulation time.
   (top = forward, left = vehicle left), see `BevGrid`.
 - `ros2 run autopark bev_eval` measures how far the painted lines in the BEV are from
   their ground-truth positions (use `seed:=-1`, an empty lot).
+
+## Slot detector
+
+Marking-point approach: the network (`slot_net.py`, 1.6 M parameters, input 448x448 BEV,
+output stride 4) predicts where each painted side line ends at the aisle (heatmap + sub-cell
+offset), the direction into the slot, and a vacancy map. `slot_codec.py` pairs neighbouring
+points one slot width apart into slots and averages the vacancy over the slot entrance.
+
+```bash
+# 1. dataset (simulation running: ros2 launch autopark bringup.launch.py gui:=false mode:=fast detector:=false)
+ros2 run autopark collect_slots --ros-args -p seed_start:=10000 -p seed_count:=150 -p out_dir:=$HOME/autopark_data/slots_v1/train
+ros2 run autopark collect_slots --ros-args -p seed_start:=10150 -p seed_count:=25 -p out_dir:=$HOME/autopark_data/slots_v1/val
+ros2 run autopark collect_slots --ros-args -p seed_start:=0 -p seed_count:=30 -p out_dir:=$HOME/autopark_data/slots_v1/test
+# 2. train (CPU: ~11 min/epoch on the i5-8265U) and 3. evaluate on the test scenarios
+ros2 run autopark train_slots --data ~/autopark_data/slots_v1 --epochs 12
+ros2 run autopark eval_slots --split test
+```
+
+Seeds >= 10000 are dataset scenarios with 3-10 empty slots (balanced vacancy labels); the
+test split uses the normal 1-3-empty scenarios. The splits never share a scenario.
+
+**Training on Colab (GPU):** upload `autopark/autopark` and `autopark_sim/autopark_sim`
+(pure Python, no ROS needed) and the dataset folder, then
+`!pip install opencv-python-headless` and
+`!PYTHONPATH=. python -m autopark.train_slots --data slots_v1 --out slotnet.pt --workers 2`.
+Copy `slotnet.pt` back to `~/autopark_models/`.
 
 ## Run
 

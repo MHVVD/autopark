@@ -105,6 +105,13 @@ def test_scenario_valid(seed):
     assert x < lot.ROW_X0 - 2 and abs(y) < 1.0
 
 
+@pytest.mark.parametrize('seed', [10000, 10001, 10050])
+def test_dataset_seeds_have_more_empty_slots(seed):
+    sc = make_scenario(seed)
+    assert 3 <= len(sc.empty_slot_ids) <= 10
+    assert len(sc.parked) + len(sc.empty_slot_ids) == 16
+
+
 def test_empty_lot_scenario():
     sc = make_scenario(EMPTY_LOT_SEED)
     assert sc.parked == [] and len(sc.empty_slot_ids) == 16
