@@ -10,6 +10,8 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/ParkingSlot.msg"
   "msg/ParkingSlotArray.msg"
   "msg/ParkingPath.msg"
+  "msg/ControlStatus.msg"
+  "msg/ParkingStatus.msg"
   "srv/ResetScenario.srv"
   "srv/PlanParking.srv"
   DEPENDENCIES std_msgs geometry_msgs

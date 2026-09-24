@@ -37,6 +37,9 @@ setup(
             'planner = autopark.planner_node:main',
             'plan_bench = autopark.plan_bench:main',
             'plan_eval = autopark.plan_eval:main',
+            'controller = autopark.controller_node:main',
+            'parking_manager = autopark.parking_manager_node:main',
+            'park_eval = autopark.park_eval:main',
         ],
     },
 )

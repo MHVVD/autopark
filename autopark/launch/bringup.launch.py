@@ -1,5 +1,5 @@
 """Simulation + the autonomy stack (odometry, bird's-eye view, slot detector, slot tracker,
-planner).
+planner, controller, parking manager).
 
 Args (passed through to autopark_sim/sim.launch.py): seed, gui, mode
   heading_source  imu | steering   odometry heading source   default imu
@@ -12,6 +12,11 @@ Args (passed through to autopark_sim/sim.launch.py): seed, gui, mode
   noise_dropout   0..1             probability of dropping a detected slot            default 0
   noise_false     per frame        mean number of false slots per frame               default 0
   planner         true | false     run the planner (/parking/plan service)            default true
+  park            true | false     run the controller + parking manager: the car      default true
+                                   searches for a vacant slot and parks by itself
+                                   (use park:=false for the evaluation tools that drive)
+  replan          closed | open    closed: replan at cusps and correct the final       default closed
+                                   approach with the slot estimate; open: plan once
 The tracker always reads /slots/detections_noisy (a pass-through when all noise is 0) and is
 told the injected noise level (extra_pos_std / extra_yaw_std_deg).
 
@@ -62,6 +67,12 @@ def generate_launch_description():
     planner = Node(package='autopark', executable='planner', output='screen',
                    parameters=[{'use_sim_time': True}],
                    condition=IfCondition(LaunchConfiguration('planner')))
+    controller = Node(package='autopark', executable='controller', output='screen',
+                      parameters=[{'use_sim_time': True}],
+                      condition=IfCondition(LaunchConfiguration('park')))
+    manager = Node(package='autopark', executable='parking_manager', output='screen',
+                   parameters=[{'use_sim_time': True, 'replan': LaunchConfiguration('replan')}],
+                   condition=IfCondition(LaunchConfiguration('park')))
     return LaunchDescription([
         DeclareLaunchArgument('seed', default_value='0'),
         DeclareLaunchArgument('gui', default_value='true'),
@@ -76,6 +87,8 @@ def generate_launch_description():
         DeclareLaunchArgument('noise_dropout', default_value='0.0'),
         DeclareLaunchArgument('noise_false', default_value='0.0'),
         DeclareLaunchArgument('planner', default_value='true'),
+        DeclareLaunchArgument('park', default_value='true'),
+        DeclareLaunchArgument('replan', default_value='closed'),
         SetEnvironmentVariable('OPENBLAS_NUM_THREADS', '1'),
         sim,
         odometry,
@@ -84,4 +97,6 @@ def generate_launch_description():
         noise,
         tracker,
         planner,
+        controller,
+        manager,
     ])

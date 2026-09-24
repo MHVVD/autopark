@@ -10,12 +10,13 @@ and reverses into it. Work in progress, built milestone by milestone.
 | 3. Slot detector (dataset from ground truth, PyTorch) | done |
 | 4. Slot tracker (Kalman filter) | done |
 | 5. Planner (Hybrid A* + Reeds-Shepp) | done |
-| 6. Controller (Stanley fwd/rev) + parking manager | next |
-| 7. Experiments, visualisation, write-up | |
+| 6. Controller (Stanley fwd/rev) + parking manager | done |
+| 7. Experiments, visualisation, write-up | next |
 
 ## Packages
 
-- `autopark_msgs`: `ParkingSlot`, `ParkingSlotArray`, `ParkingPath`, `ResetScenario`, `PlanParking`.
+- `autopark_msgs`: `ParkingSlot`, `ParkingSlotArray`, `ParkingPath`, `ControlStatus`, `ParkingStatus`,
+  `ResetScenario`, `PlanParking`.
 - `autopark_sim`: Webots world (generated from `lot.py`), vehicle plugin, ground-truth
   supervisor. Pure geometry/scenario/vehicle maths lives in modules without ROS imports.
 - `autopark`: the autonomy stack (currently odometry) and evaluation tools.
@@ -37,6 +38,8 @@ and reverses into it. Work in progress, built milestone by milestone.
 | `/parking/plan` | autopark_msgs/srv/PlanParking | plan into a tracked slot (`slot_id`, -1 = nearest selectable vacant) |
 | `/parking/path` | autopark_msgs/ParkingPath | latest plan (odom): rear-axle poses every 0.1 m, gear and curvature per sample |
 | `/parking/path_viz`, `/parking/path_image` | nav_msgs/Path, sensor_msgs/Image | the plan for RViz, and drawn on the BEV |
+| `/parking/path_exec` | autopark_msgs/ParkingPath | what the controller follows (sent by the parking manager) |
+| `/parking/control_status`, `/parking/status` | ControlStatus, ParkingStatus | controller and parking manager state |
 | `/odom` + TF odom->base_link | nav_msgs/Odometry | Ackermann dead reckoning, heading from IMU (or steering) |
 | `/ground_truth/pose`, `/ground_truth/slots` | Odometry, ParkingSlotArray | evaluation/labels only, never used by the stack |
 | `/ground_truth/reset` | autopark_msgs/srv/ResetScenario | deterministic scenario from a seed |
@@ -152,11 +155,52 @@ Results (milestone 5):
   of the slot centre). Slots still ahead of the car are refused (outside the explored area);
   planning time median 2.0 s, max 7.4 s with the simulation and perception on the same CPU.
 
+## Controller and parking manager
+
+`stanley.py`: path tracking per segment of constant direction. Forward: Stanley at the front
+axle (lateral error measured across the front axle's direction of travel, yaw + steering).
+Reverse: the same heading + cross-track structure at the rear axle with gains per metre
+(error dynamics e'' + 2 e' + e = 0 per metre; Stanley's speed-scaled gains at the rear axle
+settle over ~5 m when reversing, too slow for a parking slot). Curvature feedforward. The
+speed profile brakes to creep speed before every cusp and every steering jump in the path
+(planned paths switch between full-lock arcs and the steering actuator needs ~1.4 s for
+that), and slows to a stop while the steering lags its command. Each segment starts with the
+wheels turned at standstill. In a kinematic model with the actuator limits and 60 ms delay
+(`kinematic_sim.py`), on 31 planned manoeuvres: max tracking error 4.7 cm, final error < 1 cm.
+
+`parking_manager_node.py`: search (follows the aisle centre estimated from the tracked slots)
+-> stop once a selectable-vacant slot has been passed by 3 m -> plan -> execute -> done / failed.
+`replan:=closed` sends the path up to the first cusp, replans at each cusp (standing) with the
+latest slot estimate, and on the final reverse moves the remaining path rigidly with the goal
+when the tracked slot moves (1 cm .. 25 cm). `replan:=open` plans once and executes the whole
+path. `ros2 run autopark park_eval` scores autonomous runs against ground truth.
+
+Results (milestone 6, 8 scenarios per mode, full stack in Webots, scored against ground truth):
+
+| | plan once (`open`) | closed loop (`closed`) |
+|---|---|---|
+| parked, no contact | 8 / 8 | 8 / 8 |
+| min clearance to parked cars | 0.50 m | 0.51 m |
+| final lateral error (median / max) | 1.1 / 2.7 cm | 1.1 / 3.2 cm |
+| final depth error (median / max) | 2.4 / 3.0 cm | 1.4 / 1.7 cm |
+| final heading error (median / max) | 0.35 / 0.75 deg | 0.58 / 1.37 deg |
+| time from start of search (median) | 45 s | 47 s |
+
+Limitation found here: the slot detector was trained on views from the aisle (car within ~20
+deg of the aisle). When the car turns during the manoeuvre it detects nothing, and at
+intermediate angles its output is biased (the first closed-loop version, which corrected with
+those views, parked 7-10 cm off, and deleted every track when the car turned). The tracker now
+only uses and expects detections within 20 deg of the trained view angle, so during the final
+reverse (car at ~90 deg) there is no new information and closed loop ~ plan once.
+
 ## Run
 
 ```bash
 cd ~/p_WS && colcon build --symlink-install && source install/setup.bash
-ros2 launch autopark bringup.launch.py            # add gui:=false for no 3D view, seed:=N
+ros2 launch autopark bringup.launch.py seed:=5     # the car finds a vacant slot and parks (gui:=false: no 3D view)
+ros2 topic echo /parking/status                    # what the parking manager is doing
+# the evaluation tools that drive the car need park:=false:
+ros2 launch autopark bringup.launch.py park:=false
 ros2 run autopark odom_eval --ros-args -p duration:=28.0   # terminal 2
 ros2 run autopark drive_test                               # terminal 3
 ros2 service call /ground_truth/reset autopark_msgs/srv/ResetScenario "{seed: 5}"
