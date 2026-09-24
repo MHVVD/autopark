@@ -9,7 +9,9 @@ find_package(geometry_msgs REQUIRED)
 rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/ParkingSlot.msg"
   "msg/ParkingSlotArray.msg"
+  "msg/ParkingPath.msg"
   "srv/ResetScenario.srv"
+  "srv/PlanParking.srv"
   DEPENDENCIES std_msgs geometry_msgs
 )
 

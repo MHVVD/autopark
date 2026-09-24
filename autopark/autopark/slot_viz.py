@@ -50,3 +50,19 @@ def gt_slots_ground(slots_map, pose):
         right = sc.MarkingPoint(g[1, 0], g[1, 1], dx, dy)
         out.append(sc.Slot(left, right, math.atan2(dy, dx), vacancy=0.0 if s['occupied'] else 1.0))
     return out
+
+
+def draw_path(img, xs, ys, dirs, footprints=()):
+    """Path in the ground frame: forward blue, reverse orange; `footprints` are car corner lists
+    (e.g. the goal pose) drawn as outlines."""
+    pts = [_px(x, y) for x, y in zip(xs, ys)]
+    for i in range(1, len(pts)):
+        color = (255, 128, 0) if dirs[i] > 0 else (0, 140, 255)
+        cv2.line(img, pts[i - 1], pts[i], color, 2, cv2.LINE_AA)
+    for i in range(1, len(dirs) - 1):
+        if dirs[i + 1] != dirs[i]:
+            cv2.circle(img, pts[i], 5, (255, 255, 255), 1, cv2.LINE_AA)       # cusp
+    for fp in footprints:
+        poly = np.array([_px(x, y) for x, y in fp], np.int32)
+        cv2.polylines(img, [poly], True, (255, 0, 255), 1, cv2.LINE_AA)
+    return img

@@ -1,0 +1,6 @@
+# Plan a reverse-in manoeuvre from the current odometry pose into a tracked slot.
+int32 slot_id      # track id from /slots/tracked; -1 = the nearest selectable vacant slot
+---
+bool success
+string message
+autopark_msgs/ParkingPath path

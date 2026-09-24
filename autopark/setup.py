@@ -34,6 +34,9 @@ setup(
             'slot_tracker = autopark.slot_tracker_node:main',
             'detection_noise = autopark.detection_noise:main',
             'track_eval = autopark.track_eval:main',
+            'planner = autopark.planner_node:main',
+            'plan_bench = autopark.plan_bench:main',
+            'plan_eval = autopark.plan_eval:main',
         ],
     },
 )

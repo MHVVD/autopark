@@ -9,13 +9,13 @@ and reverses into it. Work in progress, built milestone by milestone.
 | 2. Bird's-eye view (camera calibration, IPM, stitching) | done |
 | 3. Slot detector (dataset from ground truth, PyTorch) | done |
 | 4. Slot tracker (Kalman filter) | done |
-| 5. Planner (Hybrid A* + Reeds-Shepp) | next |
-| 6. Controller (Stanley fwd/rev) + parking manager | |
+| 5. Planner (Hybrid A* + Reeds-Shepp) | done |
+| 6. Controller (Stanley fwd/rev) + parking manager | next |
 | 7. Experiments, visualisation, write-up | |
 
 ## Packages
 
-- `autopark_msgs`: `ParkingSlot`, `ParkingSlotArray`, `ResetScenario`.
+- `autopark_msgs`: `ParkingSlot`, `ParkingSlotArray`, `ParkingPath`, `ResetScenario`, `PlanParking`.
 - `autopark_sim`: Webots world (generated from `lot.py`), vehicle plugin, ground-truth
   supervisor. Pure geometry/scenario/vehicle maths lives in modules without ROS imports.
 - `autopark`: the autonomy stack (currently odometry) and evaluation tools.
@@ -34,6 +34,9 @@ and reverses into it. Work in progress, built milestone by milestone.
 | `/slots/detections_noisy` | autopark_msgs/ParkingSlotArray | detections after optional injected noise (pass-through by default) |
 | `/slots/tracked` | autopark_msgs/ParkingSlotArray | confirmed slot tracks in odom: id, entrance, covariance, fused vacancy |
 | `/slots/tracked_image` | sensor_msgs/Image | BEV with the tracks drawn |
+| `/parking/plan` | autopark_msgs/srv/PlanParking | plan into a tracked slot (`slot_id`, -1 = nearest selectable vacant) |
+| `/parking/path` | autopark_msgs/ParkingPath | latest plan (odom): rear-axle poses every 0.1 m, gear and curvature per sample |
+| `/parking/path_viz`, `/parking/path_image` | nav_msgs/Path, sensor_msgs/Image | the plan for RViz, and drawn on the BEV |
 | `/odom` + TF odom->base_link | nav_msgs/Odometry | Ackermann dead reckoning, heading from IMU (or steering) |
 | `/ground_truth/pose`, `/ground_truth/slots` | Odometry, ParkingSlotArray | evaluation/labels only, never used by the stack |
 | `/ground_truth/reset` | autopark_msgs/srv/ResetScenario | deterministic scenario from a seed |
@@ -104,6 +107,51 @@ simulation time of the render. webots_ros2's own camera publisher stamps with a 
 by /clock from another process; measured per frame, its stamps lagged the render by one step
 88 % of the time and by 0 or 2 steps otherwise (2-3 cm of error at 1.2 m/s).
 
+## Planner
+
+Hybrid A* (`hybrid_astar.py`) with Reeds-Shepp analytic expansion (`reeds_shepp.py`: the
+CSC, CCC, CCCC, CCSC and CCSCC families with their symmetries, 44 candidate formulas as in
+OMPL; verified: every candidate ends exactly on the goal, distances are symmetric and satisfy
+the triangle inequality on random poses).
+
+- Planning problem (`parking_goal.py`), built only from perception: the goal is the rear-axle
+  pose that centres the car in the tracked slot, facing out (reverse-in). Every tracked slot
+  that is not selectable-vacant (vacancy > 0.95 and >= 3 close observations) is a keep-out
+  box, grown 0.25 m towards the aisle and 0.05 m sideways to bound a car parked in it (worst
+  case in 3000 simulated scenarios: 0.20 m and 0.03 m); the band behind each row is keep-out.
+  Only explored space is drivable: the planner node records the odometry pose every metre while
+  the car heads along the aisle, and the explored area is the union of a car-frame box
+  (-3.5..5.5 m along, +-9 m across) at those poses. The box is chosen so that every slot
+  reaching into it had its entrance in the tracker's view (checked exhaustively in the tests),
+  so an unseen occupied slot can never look free. Obstacles that are not parked cars in slots
+  (pedestrians, pillars) are not modelled: a real system would add a free-space map.
+- Search: 7 steering angles (|steer| <= 0.55 rad of the 0.6 rad actuator limit, min turning
+  radius 4.57 m), forward and reverse arcs of 0.6 m, 0.25 m / 5 deg pruning grid. Cost:
+  length (reverse x1.5) + 3 m per gear change + steering penalties. Heuristic: max(obstacle
+  aware 2D distance, obstacle-free Reeds-Shepp distance), weight 2. Pieces between gear
+  changes are at least 0.5 m.
+- Collision check: points every 5 cm on the car outline need clearance >= 10 cm margin in a
+  2.5 cm distance field that is made conservative for its resolution; tests check it against
+  exact polygon geometry.
+
+`ros2 run autopark plan_bench` benchmarks the planner offline on ground-truth scenarios and
+checks every path with exact geometry against the true parked-car rectangles.
+`ros2 run autopark plan_eval` does the same on the live stack (perception + planner).
+
+Results (milestone 5):
+- Offline, 50 scenarios, 214 problems (start 3 m before to 8 m past the slot): 214 solved,
+  all collision-free against the true cars (min clearance 0.33 m), kinematically feasible
+  and ending inside the slot; planning time median 0.14 s, p90 0.97 s, max 2.5 s (laptop CPU);
+  0-3 gear changes.
+- Slot pose errors given to the planner (independent per slot): 5 cm / 0.5 deg: 104 / 107
+  solved, all safe; 15 cm / 2 deg: 56 solved; 30 cm / 6 deg (a single raw detection at the
+  highest noise level): 35 solved, one touching a car, only 12 ending inside the slot.
+- Live (8 scenarios, full perception stack, planning at two stops): every request for a slot
+  the car had passed was solved (36 / 36), all collision-free against the true cars (min
+  0.39 m) and ending inside the true slot (car within 4.6 cm lateral, 2.8 cm depth, 0.5 deg
+  of the slot centre). Slots still ahead of the car are refused (outside the explored area);
+  planning time median 2.0 s, max 7.4 s with the simulation and perception on the same CPU.
+
 ## Run
 
 ```bash
@@ -113,6 +161,8 @@ ros2 run autopark odom_eval --ros-args -p duration:=28.0   # terminal 2
 ros2 run autopark drive_test                               # terminal 3
 ros2 service call /ground_truth/reset autopark_msgs/srv/ResetScenario "{seed: 5}"
 ros2 run rqt_image_view rqt_image_view /bev/image      # view the bird's-eye view
+ros2 service call /parking/plan autopark_msgs/srv/PlanParking "{slot_id: -1}"   # plan into the nearest vacant slot
+ros2 run rqt_image_view rqt_image_view /parking/path_image                      # view the plan
 ```
 
 Tests: `python3 -m pytest -q autopark_sim/test autopark/test` (with ROS sourced).
