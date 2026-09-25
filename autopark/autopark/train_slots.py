@@ -2,9 +2,12 @@
 
     ros2 run autopark train_slots --data ~/autopark_data/slots_v1 --epochs 12 --out ~/autopark_models/slotnet.pt
 
+Several datasets: --data a,b:2 (comma-separated; ':n' keeps every n-th training image of that
+dataset). Fine-tuning: --init <checkpoint> starts from its weights.
+
 Also runs without ROS (e.g. Colab): `python -m autopark.train_slots ...` with the autopark and
 autopark_sim Python packages on PYTHONPATH. Uses CUDA when available and supported.
-Expects <data>/train and <data>/val as written by collect_slots. Writes <out> (best validation
+Expects <data>/train and <data>/val as written by collect_slots / collect_poses. Writes <out> (best validation
 loss) and <out>.csv (per-epoch losses).
 """
 import argparse
@@ -64,21 +67,29 @@ def main(argv=None):
     ap.add_argument('--threads', type=int, default=4)
     ap.add_argument('--device', default='auto')
     ap.add_argument('--limit', type=int, default=0, help='max batches per epoch (smoke tests)')
+    ap.add_argument('--init', default='', help='checkpoint to start from (fine-tuning)')
     args = ap.parse_args(argv)
 
     torch.manual_seed(0)
     torch.set_num_threads(args.threads)
     device = pick_device(args.device)
-    train = SlotDataset(os.path.join(args.data, 'train'), augment=True)
-    val = SlotDataset(os.path.join(args.data, 'val'))
+    roots = [(r.rsplit(':', 1)[0], int(r.rsplit(':', 1)[1])) if ':' in r else (r, 1)
+             for r in args.data.split(',')]
+    train = torch.utils.data.ConcatDataset([SlotDataset(os.path.join(os.path.expanduser(r), 'train'), augment=True,
+                                                        seed=k, every=n) for k, (r, n) in enumerate(roots)])
+    val = torch.utils.data.ConcatDataset([SlotDataset(os.path.join(os.path.expanduser(r), 'val'))
+                                          for r, _ in roots])
     tl = torch.utils.data.DataLoader(train, args.batch, shuffle=True, num_workers=args.workers,
                                      drop_last=True, persistent_workers=args.workers > 0)
     vl = torch.utils.data.DataLoader(val, args.batch, num_workers=args.workers)
     net = SlotNet().to(device)
+    if args.init:
+        net.load_state_dict(torch.load(args.init, map_location=device, weights_only=False)['model'])
     opt = torch.optim.AdamW(net.parameters(), args.lr, weight_decay=1e-4)
     steps = args.epochs * (min(len(tl), args.limit) if args.limit else len(tl))
     sched = torch.optim.lr_scheduler.OneCycleLR(opt, args.lr, total_steps=steps, pct_start=0.1)
-    print(f'device {device} | train {len(train)} | val {len(val)} | {steps} steps', flush=True)
+    print(f'device {device} | train {len(train)} | val {len(val)} | {steps} steps'
+          + (f' | init {args.init}' if args.init else ''), flush=True)
 
     os.makedirs(os.path.dirname(os.path.abspath(args.out)), exist_ok=True)
     best = np.inf
@@ -97,7 +108,8 @@ def main(argv=None):
             tag = ''
             if va['total'] < best:
                 best = va['total']
-                torch.save(dict(model=net.state_dict(), config={}, epoch=ep, val=va), args.out)
+                torch.save(dict(model=net.state_dict(), config={}, epoch=ep, val=va, data=args.data,
+                                init=args.init), args.out)
                 tag = ' *saved*'
             print(f'epoch {ep:2d} {dt:5.0f}s | train {tr["total"]:.3f} | val {va["total"]:.3f} '
                   f'(heat {va["heat"]:.3f} off {va["offset"]:.3f} dir {va["direction"]:.3f} '

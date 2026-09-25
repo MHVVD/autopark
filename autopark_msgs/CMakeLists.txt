@@ -14,6 +14,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/ParkingStatus.msg"
   "srv/ResetScenario.srv"
   "srv/PlanParking.srv"
+  "srv/SetPose.srv"
   DEPENDENCIES std_msgs geometry_msgs
 )
 

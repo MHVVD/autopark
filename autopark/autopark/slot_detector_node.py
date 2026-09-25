@@ -43,7 +43,7 @@ def to_msg(slot):
 class SlotDetector(Node):
     def __init__(self):
         super().__init__('slot_detector')
-        self.declare_parameter('model', os.path.expanduser('~/autopark_models/slotnet.pt'))
+        self.declare_parameter('model', os.path.expanduser('~/autopark_models/slotnet_v2.pt'))
         self.declare_parameter('threshold', 0.3)
         self.declare_parameter('threads', 2)
         self.declare_parameter('debug_image', True)

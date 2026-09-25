@@ -8,7 +8,8 @@ its stamp and fused by autopark.slot_tracker. Published slots are the confirmed 
 /slots/tracked_image draws the tracks (in the current car frame) on the latest BEV.
 
 Parameters: detections_topic, extra_pos_std / extra_yaw_std (added to the detector error
-model, e.g. when noise is injected), view_margin, view_range.
+model, e.g. when noise is injected), view_margin, view_range, view_yaw_tol_deg (detections
+of slots seen at more than this from perpendicular are ignored and do not count as misses).
 """
 import math
 
@@ -24,8 +25,8 @@ from std_msgs.msg import Int64
 
 from autopark import slot_codec as sc
 from autopark.odometry import compose, inverse, yaw_from_quaternion
-from autopark.slot_tracker import (CAR_CENTRE_X, VIEW_MARGIN, VIEW_RANGE, Detection, SlotTracker, heading_valid,
-                                   in_view)
+from autopark.slot_tracker import (CAR_CENTRE_X, VIEW_MARGIN, VIEW_RANGE, VIEW_YAW_TOL, Detection, SlotTracker,
+                                   heading_valid, in_view)
 from autopark.slot_viz import draw_slots
 
 STEP_MS = 20
@@ -43,11 +44,13 @@ class SlotTrackerNode(Node):
         self.declare_parameter('extra_yaw_std_deg', 0.0)
         self.declare_parameter('view_margin', VIEW_MARGIN)
         self.declare_parameter('view_range', VIEW_RANGE)
+        self.declare_parameter('view_yaw_tol_deg', math.degrees(VIEW_YAW_TOL))
         p = self.get_parameter
         self.tracker = SlotTracker(extra_pos_std=p('extra_pos_std').value,
                                    extra_yaw_std=math.radians(p('extra_yaw_std_deg').value))
         self.view_margin = p('view_margin').value
         self.view_range = p('view_range').value
+        self.yaw_tol = math.radians(p('view_yaw_tol_deg').value)
 
         self.odom = {}            # ms -> (x, y, yaw)
         self.last_pose = None     # odom pose at the last tracker update
@@ -87,7 +90,7 @@ class SlotTrackerNode(Node):
 
     def in_view_fn(self, pose):
         """Whether an odom-frame point is inside the detector's view from `pose`."""
-        return lambda x, y, th=None: in_view(pose, x, y, self.view_margin, self.view_range, th)
+        return lambda x, y, th=None: in_view(pose, x, y, self.view_margin, self.view_range, th, self.yaw_tol)
 
     def on_dets(self, msg):
         pose = self.pose_at(msg.header.stamp)
@@ -100,7 +103,7 @@ class SlotTrackerNode(Node):
 
         dets = []
         for s in msg.slots:
-            if not heading_valid(s.entrance.theta):
+            if not heading_valid(s.entrance.theta, self.yaw_tol):
                 continue            # seen from an angle the detector was not trained for
             x, y, th = compose(pose, (s.entrance.x, s.entrance.y, s.entrance.theta))
             rng = math.hypot(s.entrance.x - CAR_CENTRE_X, s.entrance.y)
