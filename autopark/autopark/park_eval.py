@@ -11,6 +11,10 @@ until the manager reports done or failed (or `timeout` s of simulation time). Sc
   min clearance   along the true trajectory to the true parked cars (m)
   time            from the start of the search to done; plans, corrections, max tracking
                   error (controller)
+The true trajectory starts at the first ground-truth pose near the scenario's start pose:
+poses still queued from before the reset (the car where the previous run left it) are
+dropped and counted (stale_poses_dropped). Without this, a backlog under CPU load put the
+previous parked pose into the new scenario, where another car may stand: a false contact.
 
     ros2 run autopark park_eval --ros-args -p use_sim_time:=true -p seeds:=[0,1,2] -p label:=closed
 """
@@ -62,8 +66,11 @@ class ParkEval(Node):
         q = m.pose.pose.orientation
         self.t = _sec(m.header.stamp)
         if self.state == 'run':
-            self.traj.append((m.pose.pose.position.x, m.pose.pose.position.y,
-                              yaw_from_quaternion(q.x, q.y, q.z, q.w)))
+            p = (m.pose.pose.position.x, m.pose.pose.position.y, yaw_from_quaternion(q.x, q.y, q.z, q.w))
+            if not self.traj and math.hypot(p[0] - self.scenario.ego[0], p[1] - self.scenario.ego[1]) > 0.5:
+                self.stale += 1     # queued pose from before the reset (the previous scenario)
+                return
+            self.traj.append(p)
 
     def on_status(self, m):
         if self.state != 'run' or self.t < self.reset_t + 0.5:
@@ -96,6 +103,7 @@ class ParkEval(Node):
         elif self.state == 'resetting' and self.future.done():
             self.reset_t = self.t
             self.traj, self.status, self.t_search, self.t_end, self.max_track = [], None, None, None, 0.0
+            self.stale = 0
             self.state = 'run'
         elif self.state == 'run':
             finished = self.t_end is not None and self.t - self.t_end > 2.0     # let the car settle
@@ -110,7 +118,7 @@ class ParkEval(Node):
                    message=st.message if st else '', timed_out=timed_out,
                    plans=st.plans if st else 0, corrections=st.corrections if st else 0,
                    time=(self.t_end - self.t_search) if (self.t_end and self.t_search) else float('nan'),
-                   max_track_cm=100 * self.max_track)
+                   max_track_cm=100 * self.max_track, stale_poses_dropped=self.stale)
         traj = self.traj[25:] if len(self.traj) > 50 else self.traj      # skip the spawn settling
         os.makedirs(os.path.join(self.out, 'traj'), exist_ok=True)       # true trajectory, for plots / checks
         np.save(os.path.join(self.out, 'traj', f'{self.label}_{seed}.npy'), np.asarray(traj, np.float32))
