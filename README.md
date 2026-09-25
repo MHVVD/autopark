@@ -83,6 +83,40 @@ ros2 run autopark eval_slots --split test
 Seeds >= 10000 are dataset scenarios with 3-10 empty slots (balanced vacancy labels); the
 test split uses the normal 1-3-empty scenarios. The splits never share a scenario.
 
+**Views while parking (slots_v2, `slotnet_v2.pt`, the default).** `collect_slots` only drives
+along the aisle, so the first model (`slotnet.pt`) found no slot once the car turned more than
+45 deg (0 % recall). `collect_poses` teleports the car (`/ground_truth/set_pose`, keeping the
+settled suspension so every image is at rest) to poses along ground-truth parking paths,
+anywhere in the aisle at any heading, and inside empty slots, and saves the BEV:
+
+```bash
+# simulation running: ros2 launch autopark bringup.launch.py gui:=false mode:=fast detector:=false tracker:=false planner:=false park:=false
+ros2 run autopark collect_poses --ros-args -p seed_start:=10200 -p seed_count:=200 -p out_dir:=$HOME/autopark_data/slots_v2/train
+ros2 run autopark collect_poses --ros-args -p seed_start:=10400 -p seed_count:=30 -p out_dir:=$HOME/autopark_data/slots_v2/val
+ros2 run autopark collect_poses --ros-args -p seed_start:=30 -p seed_count:=40 -p poses_per_seed:=15 -p out_dir:=$HOME/autopark_data/slots_v2/test
+# fine-tune from slotnet.pt on every 2nd slots_v1 image + slots_v2 (8 epochs, ~13.5 min each on CPU)
+ros2 run autopark train_slots --data ~/autopark_data/slots_v1:2,~/autopark_data/slots_v2 --init ~/autopark_models/slotnet.pt --out ~/autopark_models/slotnet_v2.pt --epochs 8 --lr 1e-3
+ros2 run autopark eval_slots --data ~/autopark_data/slots_v2 --split test
+```
+
+Slot recall / heading error p90 on the slots_v2 test set (600 images, scenarios 30-69), by
+the car's heading relative to the aisle:
+
+| heading vs aisle | images | slotnet.pt | slotnet_v2.pt |
+|---|---|---|---|
+| 0-20 deg | 109 | 99.9 % / 0.76 deg | 100.0 % / 0.61 deg |
+| 20-45 deg | 102 | 70.2 % / 5.74 deg | 99.8 % / 0.90 deg |
+| 45-90 deg (turned, in a slot) | 389 | 0.0 % | 99.7 % / 1.27 deg |
+
+On the aisle test set (slots_v1) slotnet_v2 is as good as before (100 % recall and precision,
+entrance error 1.0 cm median, heading 0.23 deg median). The slot heading blends the painted
+lines' direction with the normal of the 2.6 m entrance segment, weighted towards the normal
+near the car (`slot_codec.blend_heading`): near the car the side lines are short stubs,
+partly under the car body. This halved the heading error within 5 m and was what made the
+closed loop work (see below). Per-frame "vacant" calls of turned views are less precise (79 %
+at the 0.5 threshold), but the wrong ones are far away: 1 of 459 within 4 m, and 4 of 763
+above 0.95 (the tracker needs a fused vacancy > 0.95 and discounts far-range vacancy).
+
 **Training on Colab (GPU):** upload `autopark/autopark` and `autopark_sim/autopark_sim`
 (pure Python, no ROS needed) and the dataset folder, then
 `!pip install opencv-python-headless` and
@@ -186,12 +220,27 @@ Results (milestone 6, 8 scenarios per mode, full stack in Webots, scored against
 | final heading error (median / max) | 0.35 / 0.75 deg | 0.58 / 1.37 deg |
 | time from start of search (median) | 45 s | 47 s |
 
-Limitation found here: the slot detector was trained on views from the aisle (car within ~20
-deg of the aisle). When the car turns during the manoeuvre it detects nothing, and at
-intermediate angles its output is biased (the first closed-loop version, which corrected with
-those views, parked 7-10 cm off, and deleted every track when the car turned). The tracker now
-only uses and expects detections within 20 deg of the trained view angle, so during the final
-reverse (car at ~90 deg) there is no new information and closed loop ~ plan once.
+The first detector only worked on views from the aisle, so in the runs above the tracker used
+detections only within 20 deg of the trained view angle, and during the final reverse (car at
+~90 deg) there was no new information: closed loop ~ plan once. With `slotnet_v2.pt` (trained
+on turned, mid-manoeuvre and in-slot views, see *Slot detector*) the tracker uses every view
+(`view_yaw_tol:=90`, the default). Same 8 scenarios:
+
+| slotnet_v2, blended heading | plan once (`open`) | closed loop (`closed`) |
+|---|---|---|
+| parked, no contact | 8 / 8 | 8 / 8 |
+| min clearance to parked cars | 0.49 m | 0.50 m |
+| final lateral error (median / max) | 1.4 / 4.4 cm | 1.4 / 2.5 cm |
+| final depth error (median / max) | 1.5 / 2.9 cm | 0.2 / 0.5 cm |
+| final heading error (median / max) | 0.72 / 1.04 deg | 0.31 / 0.97 deg |
+| time from start of search (median) | 43 s | 47 s |
+
+Closed loop now corrects the final reverse with what the cameras see from inside the slot
+(34-46 corrections per run). Before the heading blend (line direction only) it was worse than
+plan once: lateral median 4.3 / max 12.2 cm. A trace of the goal the controller steered to
+showed its lateral error swinging from +9 to -10 cm, in step with the heading estimate (4 m
+from the entrance to the goal: 1 deg ~ 7 cm); per-frame positions, stamps and odometry were
+all accurate. Old configuration: `model:=$HOME/autopark_models/slotnet.pt view_yaw_tol:=20`.
 
 ## Run
 

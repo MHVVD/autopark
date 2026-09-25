@@ -72,3 +72,21 @@ def test_pairing_rejects_non_slots():
     # heading into +y: left corner is at smaller x
     one = sc.pair_points([P(2.6, 0, 0, 1), P(0, 0, 0, 1)])[0]
     assert (one.left.x, one.right.x) == (0, 2.6) and one.heading == pytest.approx(math.pi / 2)
+
+
+def test_heading_blends_direction_and_entrance_normal():
+    import math
+    from autopark import slot_codec as sc
+    # exact points: both estimates agree
+    a = sc.MarkingPoint(2.0, 3.5, 0.0, 1.0)
+    b = sc.MarkingPoint(4.6, 3.5, 0.0, 1.0)
+    (s,) = sc.pair_points([a, b])
+    assert abs(s.heading - math.pi / 2) < 1e-9
+    # noisy line directions near the car: the entrance normal dominates
+    a = sc.MarkingPoint(0.0, 2.0, math.cos(1.62), math.sin(1.62))
+    b = sc.MarkingPoint(2.6, 2.0, math.cos(1.62), math.sin(1.62))
+    (s,) = sc.pair_points([a, b])
+    assert abs(s.heading - math.pi / 2) < 0.1 * (1.62 - math.pi / 2) + 1e-9
+    # weights: 0.9 near, 0.25 far
+    assert abs(sc.blend_heading(0.0, 0.1, 1.0) - 0.09) < 1e-3
+    assert abs(sc.blend_heading(0.0, 0.1, 20.0) - 0.025) < 1e-3

@@ -28,6 +28,7 @@ setup(
             'bev = autopark.bev_node:main',
             'bev_eval = autopark.bev_eval:main',
             'collect_slots = autopark.collect_slots:main',
+            'collect_poses = autopark.collect_poses:main',
             'train_slots = autopark.train_slots:main',
             'eval_slots = autopark.eval_slots:main',
             'slot_detector = autopark.slot_detector_node:main',

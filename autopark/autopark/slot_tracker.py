@@ -53,10 +53,11 @@ _BEV_RES = BevGrid().res
 CAR_CENTRE_X = 1.35     # m ahead of the rear axle (base_link)
 VIEW_MARGIN = 1.5       # m inside the BEV border (both entrance corners visible)
 VIEW_RANGE = 9.0        # m from the car centre
-# The detector was trained on views from the aisle (car heading within ~20 deg of the aisle,
-# i.e. slots nearly perpendicular to the car). Outside that it finds nothing or is biased, so
-# such views neither count as observations nor as misses.
-VIEW_YAW_TOL = math.radians(20.0)
+# Detections of slots seen more than this from perpendicular are ignored and do not count as
+# misses. The first detector (slotnet.pt, trained on aisle views only) needs 20 deg: turned
+# further it finds nothing or is biased. slotnet_v2.pt is also trained on turned, mid-manoeuvre
+# and in-slot views (collect_poses) and is reliable at any heading: 90 deg = no limit.
+VIEW_YAW_TOL = math.radians(90.0)
 
 
 def heading_valid(rel_heading, tol=VIEW_YAW_TOL):

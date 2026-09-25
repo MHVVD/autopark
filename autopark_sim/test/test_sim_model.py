@@ -162,3 +162,32 @@ def test_descriptions_are_valid_xml():
     assert v.find('webots/plugin/gyroNoise').text == '0.01'
     s = ET.fromstring(supervisor_description(7))
     assert s.find('webots/plugin/seed').text == '7'
+
+
+# ---------- supervisor teleport ----------
+
+def test_teleport_rotation_keeps_roll_and_pitch():
+    """_with_yaw: new heading, same roll and pitch (the car does not bounce after a teleport)."""
+    np = pytest.importorskip('numpy')
+    sp = pytest.importorskip('autopark_sim.supervisor_plugin')
+
+    def rz(a):
+        return np.array([[math.cos(a), -math.sin(a), 0], [math.sin(a), math.cos(a), 0], [0, 0, 1]])
+
+    def ry(a):
+        return np.array([[math.cos(a), 0, math.sin(a)], [0, 1, 0], [-math.sin(a), 0, math.cos(a)]])
+
+    def rx(a):
+        return np.array([[1, 0, 0], [0, math.cos(a), -math.sin(a)], [0, math.sin(a), math.cos(a)]])
+
+    def from_axis_angle(x, y, z, a):
+        k = np.array([[0, -z, y], [z, 0, -x], [-y, x, 0]])
+        return np.eye(3) + math.sin(a) * k + (1 - math.cos(a)) * k @ k
+
+    rng = np.random.default_rng(0)
+    for _ in range(200):
+        psi, theta = rng.uniform(-math.pi, math.pi, 2)
+        pitch, roll = rng.uniform(-0.03, 0.03, 2)
+        r = (rz(psi) @ ry(pitch) @ rx(roll)).flatten()
+        got = from_axis_angle(*sp._with_yaw(list(r), theta))
+        assert np.abs(got - rz(theta) @ ry(pitch) @ rx(roll)).max() < 1e-9

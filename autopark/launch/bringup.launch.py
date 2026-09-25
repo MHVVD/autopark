@@ -5,7 +5,9 @@ Args (passed through to autopark_sim/sim.launch.py): seed, gui, mode
   heading_source  imu | steering   odometry heading source   default imu
   bev             true | false     run the BEV node          default true
   detector        true | false     run the slot detector     default true
-  model           path             detector weights          default ~/autopark_models/slotnet.pt
+  model           path             detector weights          default ~/autopark_models/slotnet_v2.pt
+  view_yaw_tol    deg              tracker uses detections of slots seen within this   default 90
+                                   of perpendicular (20 for the aisle-only slotnet.pt)
   tracker         true | false     run the slot tracker      default true
   noise_pos       m                injected detection noise (entrance position std)   default 0
   noise_yaw_deg   deg              injected detection noise (heading std)             default 0
@@ -62,7 +64,8 @@ def generate_launch_description():
                    parameters=[{'use_sim_time': True,
                                 'detections_topic': '/slots/detections_noisy',
                                 'extra_pos_std': LaunchConfiguration('noise_pos'),
-                                'extra_yaw_std_deg': LaunchConfiguration('noise_yaw_deg')}],
+                                'extra_yaw_std_deg': LaunchConfiguration('noise_yaw_deg'),
+                                'view_yaw_tol_deg': LaunchConfiguration('view_yaw_tol')}],
                    condition=IfCondition(LaunchConfiguration('tracker')))
     planner = Node(package='autopark', executable='planner', output='screen',
                    parameters=[{'use_sim_time': True}],
@@ -80,8 +83,10 @@ def generate_launch_description():
         DeclareLaunchArgument('heading_source', default_value='imu'),
         DeclareLaunchArgument('bev', default_value='true'),
         DeclareLaunchArgument('detector', default_value='true'),
-        DeclareLaunchArgument('model', default_value=os.path.expanduser('~/autopark_models/slotnet.pt')),
+        DeclareLaunchArgument('model', default_value=os.path.expanduser('~/autopark_models/slotnet_v2.pt')),
         DeclareLaunchArgument('tracker', default_value='true'),
+        DeclareLaunchArgument('view_yaw_tol', default_value='90.0',
+                              description='deg from perpendicular within which the tracker uses detections'),
         DeclareLaunchArgument('noise_pos', default_value='0.0'),
         DeclareLaunchArgument('noise_yaw_deg', default_value='0.0'),
         DeclareLaunchArgument('noise_dropout', default_value='0.0'),

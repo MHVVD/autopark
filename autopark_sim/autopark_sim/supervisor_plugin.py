@@ -9,6 +9,8 @@ Publishes
   /scenario/reset      std_msgs/Int64              seed, after every reset
 Services
   /ground_truth/reset  autopark_msgs/ResetScenario  re-randomise lot + ego pose (by seed)
+  /ground_truth/set_pose autopark_msgs/SetPose      teleport the ego car, same scenario
+                                                   (data collection only; no /scenario/reset)
 
 <plugin> property: seed (scenario applied at start-up, default 0).
 """
@@ -16,7 +18,7 @@ import math
 
 import rclpy
 from autopark_msgs.msg import ParkingSlot, ParkingSlotArray
-from autopark_msgs.srv import ResetScenario
+from autopark_msgs.srv import ResetScenario, SetPose
 from geometry_msgs.msg import Point
 from nav_msgs.msg import Odometry
 from std_msgs.msg import Int64
@@ -49,6 +51,25 @@ def _quat_from_matrix(r):
     return ((m02 + m20) / s, (m12 + m21) / s, 0.25 * s, (m10 - m01) / s)
 
 
+def _axis_angle(r):
+    """Row-major 3x3 rotation matrix -> Webots SFRotation [x, y, z, angle]."""
+    qx, qy, qz, qw = _quat_from_matrix(r)
+    n = math.sqrt(qx * qx + qy * qy + qz * qz)
+    if n < 1e-12:
+        return [0.0, 0.0, 1.0, 0.0]
+    return [qx / n, qy / n, qz / n, 2 * math.atan2(n, qw)]
+
+
+def _with_yaw(r, yaw):
+    """Orientation r (row-major 3x3, world <- body) turned about the world z axis to heading
+    `yaw`, keeping roll and pitch, as a Webots SFRotation."""
+    d = yaw - math.atan2(r[3], r[0])
+    c, s = math.cos(d), math.sin(d)
+    return _axis_angle([c * r[0] - s * r[3], c * r[1] - s * r[4], c * r[2] - s * r[5],
+                        s * r[0] + c * r[3], s * r[1] + c * r[4], s * r[2] + c * r[5],
+                        r[6], r[7], r[8]])
+
+
 class GroundTruthSupervisor:
     def init(self, webots_node, properties):
         self.__sup = webots_node.robot
@@ -65,6 +86,7 @@ class GroundTruthSupervisor:
         self.__slots_pub = self.__node.create_publisher(ParkingSlotArray, '/ground_truth/slots', 10)
         self.__reset_pub = self.__node.create_publisher(Int64, '/scenario/reset', 10)
         self.__node.create_service(ResetScenario, '/ground_truth/reset', self.__on_reset)
+        self.__node.create_service(SetPose, '/ground_truth/set_pose', self.__on_set_pose)
 
         self.__apply(int(properties.get('seed', 0)))
 
@@ -91,6 +113,18 @@ class GroundTruthSupervisor:
         response.success = True
         response.message = f'seed {request.seed}'
         response.empty_slot_ids = list(sc.empty_slot_ids)
+        return response
+
+    def __on_set_pose(self, request, response):
+        """Keep the height and the roll / pitch of the (standing, settled) car and change only
+        x, y and yaw, so the suspension does not bounce after the teleport."""
+        p = request.pose
+        z = self.__ego.getField('translation').getSFVec3f()[2]
+        self.__ego.getField('translation').setSFVec3f([p.x, p.y, z])
+        self.__ego.getField('rotation').setSFRotation(_with_yaw(self.__ego.getOrientation(), p.theta))
+        self.__ego.resetPhysics()
+        response.success = True
+        response.message = f'ego at ({p.x:.2f}, {p.y:.2f}, {math.degrees(p.theta):.1f} deg)'
         return response
 
     def step(self):

@@ -1,0 +1,6 @@
+# Teleport the ego car to a pose in the map frame (rear axle, x y theta), keeping the
+# scenario. Data-collection / evaluation tool only: the autonomy stack never calls it.
+geometry_msgs/Pose2D pose
+---
+bool success
+string message

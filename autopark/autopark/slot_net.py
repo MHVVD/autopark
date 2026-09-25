@@ -113,9 +113,10 @@ def flip_targets(t, axis):
 
 
 class SlotDataset(torch.utils.data.Dataset):
-    def __init__(self, root, augment=False, seed=0):
+    def __init__(self, root, augment=False, seed=0, every=1):
+        """every: keep every n-th image (consecutive frames of a drive are highly correlated)."""
         self.root = root
-        self.items = [json.loads(l) for l in open(os.path.join(root, 'labels.jsonl'))]
+        self.items = [json.loads(l) for l in open(os.path.join(root, 'labels.jsonl'))][::every]
         self.augment = augment
         self.rng = np.random.default_rng(seed)
 

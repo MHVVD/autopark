@@ -152,9 +152,12 @@ def test_tracks_that_converge_are_merged():
 
 def test_view_angle_validity():
     from autopark.slot_tracker import heading_valid, in_view
-    assert heading_valid(math.pi / 2) and heading_valid(-math.pi / 2 + 0.3)
-    assert not heading_valid(0.0) and not heading_valid(math.pi / 4)
+    tol = math.radians(20)
+    assert heading_valid(math.pi / 2, tol) and heading_valid(-math.pi / 2 + 0.3, tol)
+    assert not heading_valid(0.0, tol) and not heading_valid(math.pi / 4, tol)
+    assert heading_valid(0.0) and heading_valid(math.pi)          # default: any heading
     # a slot 3.5 m to the left of the car: in view when perpendicular, not when the car has turned
     assert in_view((0.0, 0.0, 0.0), 1.35, 3.5, theta=math.pi / 2)
-    assert not in_view((0.0, 0.0, math.radians(45)), 1.35, 3.5, theta=math.pi / 2)
+    assert not in_view((0.0, 0.0, math.radians(45)), 1.35, 3.5, theta=math.pi / 2, yaw_tol=tol)
+    assert in_view((0.0, 0.0, math.radians(45)), 1.35, 3.5, theta=math.pi / 2)
     assert in_view((0.0, 0.0, 0.0), 1.35, 3.5)          # without a heading: position only
