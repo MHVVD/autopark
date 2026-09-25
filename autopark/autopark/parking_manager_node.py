@@ -12,7 +12,11 @@
                                   the latest slot estimate. The last segment (the reverse into
                                   the slot) is corrected while driving: when the tracked slot
                                   moves, the remaining path is moved rigidly with the goal
-                                  (small corrections only; a large jump stops and replans).
+                                  (small corrections only; a large jump is ignored). If the
+                                  replan at a cusp fails (e.g. the latest estimate puts the
+                                  goal in collision), the rest of the previous plan is driven
+                                  as planned, without corrections: the same as plan once, so
+                                  closing the loop never leaves the car stranded mid-manoeuvre.
   done       parked (controller reached the end of the path)
   failed     no slot within `max_search` m, planning failed `max_plans` times, or the
              controller aborted
@@ -86,8 +90,9 @@ class ParkingManager(Node):
         self.excluded = set()
         self.plans = 0
         self.corrections = 0
+        self.fallbacks = 0
         self.plan_id = 0
-        self.exec = None           # dict: plan msg, part sent, goal, last segment?
+        self.exec = None           # dict: plan msg, part sent, goal, last segment?, fallback?
         self.future = None
         self.message = ''
 
@@ -107,7 +112,8 @@ class ParkingManager(Node):
 
     def on_tracks(self, m):
         self.tracks = m
-        if self.state == 'executing' and self.exec and self.exec['last'] and self.mode == 'closed':
+        if (self.state == 'executing' and self.exec and self.exec['last'] and self.mode == 'closed'
+                and not self.exec['fallback']):
             self.correct_final_approach()
 
     def on_control(self, m):
@@ -116,8 +122,9 @@ class ParkingManager(Node):
         if m.state == 'done':
             if self.exec['last']:
                 self.enter('done', f'parked in slot {self.target} after {self.plans} plan(s), '
-                                   f'{self.corrections} correction(s); '
-                                   f'max tracking error {100 * m.max_lateral_error:.1f} cm')
+                                   f'{self.corrections} correction(s)'
+                                   + (f', {self.fallbacks} fallback(s) to the previous plan' if self.fallbacks else '')
+                                   + f'; max tracking error {100 * m.max_lateral_error:.1f} cm')
             else:
                 self.enter('planning', 'cusp reached: replanning with the latest slot estimate')
                 self.request_plan()
@@ -201,7 +208,7 @@ class ParkingManager(Node):
                 self.enter('search', f'slot {self.target} rejected: {res.message}')
                 self.target = None
             else:
-                self.enter('failed', f'replanning failed: {res.message}')
+                self.fall_back(res.message)
             return
         self.plans += 1
         self.plan_id = self.next_plan_id
@@ -212,11 +219,25 @@ class ParkingManager(Node):
             part, last = pm.first_segment(path_fields(path))
         else:
             part, last = path_fields(path), True
-        self.exec = dict(full=path, part=part, last=last, goal=goal, revision=0)
+        self.exec = dict(full=path, part=part, last=last, goal=goal, revision=0, fallback=False)
         self.send(part, path, revision=0)
         self.enter('executing', f'plan {self.plan_id}: {res.message}; executing '
                                 + ('the whole path' if last and self.mode == 'open' else
                                    'the final segment' if last else 'up to the first cusp'))
+
+    def fall_back(self, reason):
+        """Replanning at a cusp failed: drive the rest of the previous plan as planned."""
+        rest = pm.remainder(path_fields(self.exec['full']), len(self.exec['part'].x))
+        if len(rest.x) < 2:
+            self.enter('failed', f'replanning failed: {reason}')
+            return
+        self.fallbacks += 1
+        self.plan_id = self.next_plan_id
+        self.next_plan_id += 1
+        self.exec = dict(full=self.exec['full'], part=rest, last=True, goal=self.exec['goal'], revision=0,
+                         fallback=True)
+        self.send(rest, self.exec['full'], revision=0)
+        self.enter('executing', f'replanning failed ({reason}): driving the rest of the previous plan')
 
     def send(self, part, full, revision):
         m = ParkingPath()

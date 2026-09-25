@@ -159,3 +159,12 @@ def test_rigid_correction_moves_the_goal_exactly():
     d0 = np.hypot(np.diff(path.x), np.diff(path.y))
     d1 = np.hypot(np.diff(moved.x), np.diff(moved.y))
     assert d1 == pytest.approx(d0, abs=1e-9)
+
+
+def test_remainder_continues_after_the_first_segment():
+    path = rs_path((0.0, 0.0, 0.0), (3.0, 2.0, math.pi))
+    part, last = pm.first_segment(path)
+    rest = pm.remainder(path, len(part.x))
+    assert not last
+    assert len(part.x) + len(rest.x) == len(path.x)
+    assert rest.x[-1] == path.x[-1] and rest.direction[0] != part.direction[-1]

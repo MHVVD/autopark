@@ -73,6 +73,11 @@ def first_segment(path):
         end == len(d)
 
 
+def remainder(path, start):
+    """The path from sample `start` on (same fields as first_segment)."""
+    return SimpleNamespace(**{k: list(getattr(path, k))[start:] for k in ('x', 'y', 'yaw', 'direction', 'curvature')})
+
+
 def rigid_correction(goal_old, goal_new):
     """Transform (dx, dy, dyaw about the old goal) that moves goal_old onto goal_new."""
     return goal_new[0] - goal_old[0], goal_new[1] - goal_old[1], pg_wrap(goal_new[2] - goal_old[2])
