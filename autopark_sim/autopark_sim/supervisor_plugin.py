@@ -11,22 +11,30 @@ Services
   /ground_truth/reset  autopark_msgs/ResetScenario  re-randomise lot + ego pose (by seed)
   /ground_truth/set_pose autopark_msgs/SetPose      teleport the ego car, same scenario
                                                    (data collection only; no /scenario/reset)
+Subscribes
+  /demo/record         std_msgs/String             directory: save the 3D view every 100 ms of
+                                                   simulated time as <dir>/<t_ms>.jpg, with the
+                                                   viewpoint following the ego car ('' stops).
+                                                   Needs the GUI (gui:=true), for the demo video.
 
 <plugin> property: seed (scenario applied at start-up, default 0).
 """
 import math
+import os
 
 import rclpy
 from autopark_msgs.msg import ParkingSlot, ParkingSlotArray
 from autopark_msgs.srv import ResetScenario, SetPose
 from geometry_msgs.msg import Point
 from nav_msgs.msg import Odometry
-from std_msgs.msg import Int64
+from std_msgs.msg import Int64, String
 
 from autopark_sim.lot import SLOTS_PER_ROW, slots
 from autopark_sim.scenario import EGO_Z, make_scenario
 
 SLOTS_PERIOD = 0.5  # s
+RECORD_PERIOD_MS = 100
+DEMO_VIEW = [-4.0, -19.0, 12.0]   # m, fixed camera position; it pans and tilts to follow the car
 
 
 def _stamp(msg, t):
@@ -87,6 +95,8 @@ class GroundTruthSupervisor:
         self.__reset_pub = self.__node.create_publisher(Int64, '/scenario/reset', 10)
         self.__node.create_service(ResetScenario, '/ground_truth/reset', self.__on_reset)
         self.__node.create_service(SetPose, '/ground_truth/set_pose', self.__on_set_pose)
+        self.__node.create_subscription(String, '/demo/record', self.__on_record, 10)
+        self.__record_dir = ''
 
         self.__apply(int(properties.get('seed', 0)))
 
@@ -127,9 +137,27 @@ class GroundTruthSupervisor:
         response.message = f'ego at ({p.x:.2f}, {p.y:.2f}, {math.degrees(p.theta):.1f} deg)'
         return response
 
+    def __on_record(self, msg):
+        self.__record_dir = msg.data
+        if not msg.data:
+            self.__node.get_logger().info('demo recording stopped')
+            return
+        os.makedirs(msg.data, exist_ok=True)
+        children = self.__sup.getRoot().getField('children')
+        for i in range(children.getCount()):
+            n = children.getMFNode(i)
+            if n.getTypeName() == 'Viewpoint':
+                n.getField('follow').setSFString('ego_car')
+                n.getField('followType').setSFString('Pan and Tilt Shot')
+                n.getField('position').setSFVec3f(DEMO_VIEW)
+        self.__node.get_logger().info(f'demo recording to {msg.data}')
+
     def step(self):
         rclpy.spin_once(self.__node, timeout_sec=0)
         t = self.__sup.getTime()
+        t_ms = int(round(t * 1000))
+        if self.__record_dir and t_ms % RECORD_PERIOD_MS == 0:
+            self.__sup.exportImage(os.path.join(self.__record_dir, f'{t_ms:08d}.jpg'), 90)
 
         pos = self.__ego.getPosition()
         rot = self.__ego.getOrientation()

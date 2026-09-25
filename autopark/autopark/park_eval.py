@@ -112,6 +112,8 @@ class ParkEval(Node):
                    time=(self.t_end - self.t_search) if (self.t_end and self.t_search) else float('nan'),
                    max_track_cm=100 * self.max_track)
         traj = self.traj[25:] if len(self.traj) > 50 else self.traj      # skip the spawn settling
+        os.makedirs(os.path.join(self.out, 'traj'), exist_ok=True)       # true trajectory, for plots / checks
+        np.save(os.path.join(self.out, 'traj', f'{self.label}_{seed}.npy'), np.asarray(traj, np.float32))
         xs, ys, th = (np.array(v) for v in zip(*traj))
         clear, _ = path_clearance(self.car, xs, ys, th, self.cars, stride=5)
         row['min_clearance'] = clear
