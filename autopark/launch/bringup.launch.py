@@ -13,6 +13,8 @@ Args (passed through to autopark_sim/sim.launch.py): seed, gui, mode
   noise_yaw_deg   deg              injected detection noise (heading std)             default 0
   noise_dropout   0..1             probability of dropping a detected slot            default 0
   noise_false     per frame        mean number of false slots per frame               default 0
+  noise_mode      white | field    white: independent per frame; field: smooth error    default white
+                                   field over the car frame (systematic, viewpoint-dependent)
   planner         true | false     run the planner (/parking/plan service)            default true
   park            true | false     run the controller + parking manager: the car      default true
                                    searches for a vacant slot and parks by itself
@@ -58,7 +60,8 @@ def generate_launch_description():
                               'pos_std': LaunchConfiguration('noise_pos'),
                               'yaw_std_deg': LaunchConfiguration('noise_yaw_deg'),
                               'dropout': LaunchConfiguration('noise_dropout'),
-                              'false_per_frame': LaunchConfiguration('noise_false')}],
+                              'false_per_frame': LaunchConfiguration('noise_false'),
+                              'mode': LaunchConfiguration('noise_mode')}],
                  condition=IfCondition(LaunchConfiguration('tracker')))
     tracker = Node(package='autopark', executable='slot_tracker', output='screen',
                    parameters=[{'use_sim_time': True,
@@ -88,6 +91,8 @@ def generate_launch_description():
         DeclareLaunchArgument('view_yaw_tol', default_value='90.0',
                               description='deg from perpendicular within which the tracker uses detections'),
         DeclareLaunchArgument('noise_pos', default_value='0.0'),
+        DeclareLaunchArgument('noise_mode', default_value='white',
+                              description='white: independent per frame; field: systematic, viewpoint-dependent'),
         DeclareLaunchArgument('noise_yaw_deg', default_value='0.0'),
         DeclareLaunchArgument('noise_dropout', default_value='0.0'),
         DeclareLaunchArgument('noise_false', default_value='0.0'),
