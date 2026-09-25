@@ -12,7 +12,9 @@
                                   the latest slot estimate. The last segment (the reverse into
                                   the slot) is corrected while driving: when the tracked slot
                                   moves, the remaining path is moved rigidly with the goal
-                                  (small corrections only; a large jump is ignored). If the
+                                  (small corrections only; a large jump is ignored, and the
+                                  goal stays within correction_total_max of the goal the
+                                  planner checked for collisions). If the
                                   replan at a cusp fails (e.g. the latest estimate puts the
                                   goal in collision), the rest of the previous plan is driven
                                   as planned, without corrections: the same as plan once, so
@@ -51,6 +53,7 @@ class ParkingManager(Node):
         for name, default in (('replan', 'closed'), ('autostart', True), ('search_speed', 1.0),
                               ('pass_distance', 3.0), ('max_search', 45.0), ('settle', 1.0),
                               ('max_plans', 6), ('correction_min', 0.01), ('correction_max', 0.25),
+                              ('correction_total_max', 0.15),
                               ('start_delay', 2.0)):
             self.declare_parameter(name, default)
         p = lambda n: self.get_parameter(n).value  # noqa: E731
@@ -61,6 +64,7 @@ class ParkingManager(Node):
         self.pass_distance, self.max_search, self.settle = p('pass_distance'), p('max_search'), p('settle')
         self.max_plans = p('max_plans')
         self.corr_min, self.corr_max = p('correction_min'), p('correction_max')
+        self.corr_total_max = p('correction_total_max')
         self.start_delay = p('start_delay')
 
         self.cmd_pub = self.create_publisher(AckermannDriveStamped, '/cmd_ackermann', 10)
@@ -219,7 +223,7 @@ class ParkingManager(Node):
             part, last = pm.first_segment(path_fields(path))
         else:
             part, last = path_fields(path), True
-        self.exec = dict(full=path, part=part, last=last, goal=goal, revision=0, fallback=False)
+        self.exec = dict(full=path, part=part, last=last, goal=goal, plan_goal=goal, revision=0, fallback=False)
         self.send(part, path, revision=0)
         self.enter('executing', f'plan {self.plan_id}: {res.message}; executing '
                                 + ('the whole path' if last and self.mode == 'open' else
@@ -234,8 +238,8 @@ class ParkingManager(Node):
         self.fallbacks += 1
         self.plan_id = self.next_plan_id
         self.next_plan_id += 1
-        self.exec = dict(full=self.exec['full'], part=rest, last=True, goal=self.exec['goal'], revision=0,
-                         fallback=True)
+        self.exec = dict(full=self.exec['full'], part=rest, last=True, goal=self.exec['goal'],
+                         plan_goal=self.exec['plan_goal'], revision=0, fallback=True)
         self.send(rest, self.exec['full'], revision=0)
         self.enter('executing', f'replanning failed ({reason}): driving the rest of the previous plan')
 
@@ -268,11 +272,16 @@ class ParkingManager(Node):
         new_goal = pm.goal_for(track)
         g = self.exec['goal']
         corr = pm.rigid_correction(g, new_goal)
-        shift = math.hypot(corr[0], corr[1]) + 2.0 * abs(corr[2])     # 1 deg ~ 3.5 cm at 2 m
+        shift = pm.correction_size(g, new_goal)
         if shift < self.corr_min:
             return
         if shift > self.corr_max:
             self.get_logger().warn(f'slot estimate jumped by {shift:.2f} m: keeping the path')
+            return
+        total = pm.correction_size(self.exec['plan_goal'], new_goal)
+        if total > self.corr_total_max:     # stay near the path the planner checked for collisions
+            self.get_logger().warn(f'slot estimate {total:.2f} m from the planned goal: keeping the path',
+                                   throttle_duration_sec=2.0)
             return
         self.exec['part'] = pm.apply_correction(self.exec['part'], g, corr)
         self.exec['goal'] = new_goal
