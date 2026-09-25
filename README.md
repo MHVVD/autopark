@@ -1,25 +1,257 @@
-# autopark: vision-based autonomous parking (Webots + ROS 2 Jazzy)
+# Autopark: vision-based autonomous parking (Webots + ROS 2 Jazzy)
 
-A simulated car drives past a row of parking slots, detects an empty slot with its cameras
-and reverses into it. **Technical write-up with the results: [docs/writeup.md](docs/writeup.md).**
+A simulated car drives along a parking aisle, finds a vacant slot using only its four fisheye
+cameras and wheel odometry, plans a reversing manoeuvre and parks itself between the other
+cars. Every part of the autonomy stack (perception, state estimation, motion planning and
+control) is implemented from scratch in Python and measured against the simulator's ground
+truth, which the stack itself never sees.
 
-| Milestone | Status |
+![The Webots scene and the stack's own view: bird's-eye view with tracked slots, the planned path and the goal](docs/figures/demo_frame.jpg)
+
+**Demo video (1 min 44 s):** [release v1.0](https://github.com/MHVVD/autopark/releases/tag/v1.0) ·
+**Technical write-up:** [docs/writeup.md](docs/writeup.md)
+
+## Results at a glance
+
+- **Parks reliably and precisely.** In 12 held-out scenarios without injected noise the car
+  parked every time, never came closer than 0.47 m to another car, and stopped a median of
+  1-2 cm and 0.4 deg from the slot centre (at most 4 cm and 0.9 deg; table below).
+- **Sees slots from any angle.** The slot detector finds 99.7 % of slots even when the car is
+  turned more than 45 deg or already inside a slot (entrance error 1.6 cm median), and 100 %
+  when driving along the aisle (1.0 cm).
+- **Research question: does closing the perception loop help?** Re-detecting the slot and
+  re-planning during the manoeuvre was compared with planning once, under increasing
+  detection noise, in 168 runs. No contact occurred in any run, and the two strategies were
+  equally accurate within about 1 cm at every noise level: the Kalman tracker already averages
+  independent noise away before the plan is made, and systematic errors look the same from
+  inside the slot. The closed loop needed two safeguards to be as safe as planning once
+  ([write-up, section 4](docs/writeup.md#4-experiment-closing-the-perception-loop-under-detection-noise)).
+
+| No injected noise, 12 scenarios | plan once | closed loop |
+|---|---|---|
+| parked without contact | 12 / 12 | 12 / 12 |
+| minimum clearance to a parked car | 0.47 m | 0.50 m |
+| final lateral error, median / max | 0.7 / 1.9 cm | 1.2 / 4.0 cm |
+| final depth error, median / max | 1.7 / 2.5 cm | 0.2 / 1.0 cm |
+| final heading error, median / max | 0.40 / 0.85 deg | 0.26 / 0.70 deg |
+| time from start of search to parked (median) | 51 s | 50 s |
+
+![Parking accuracy vs detection noise](docs/figures/corner_error.png)
+
+## How it works
+
+```mermaid
+flowchart LR
+  CAM[4 fisheye cameras] --> BEV[bird's-eye view<br/>IPM + stitching]
+  BEV --> DET[slot detector<br/>CNN]
+  DET --> TRK[slot tracker<br/>Kalman filter per slot]
+  WHL[wheel encoders, steering, IMU] --> ODO[odometry]
+  ODO --> TRK
+  TRK --> MGR[parking manager<br/>state machine]
+  MGR --> PLN[planner<br/>Hybrid A* + Reeds-Shepp]
+  MGR --> CTL[controller<br/>Stanley, forward + reverse]
+  ODO --> CTL
+  CTL --> CAR[car in Webots]
+  SUP[supervisor: ground truth, scenarios] -.-> EVAL[evaluation tools]
+```
+
+### Simulation
+
+A Webots world with two facing rows of eight perpendicular slots (2.6 m x 5.2 m) across a
+7 m aisle. Each scenario is generated from a seed: which slots are empty, the models and
+colours of the parked cars, their placement inside the slot (+-20 cm sideways, +-25 cm in
+depth, +-3.4 deg) and the car's start pose. The ego car is a Toyota Prius with rate-limited
+speed and steering actuators (`autopark_sim/vehicle_plugin.py`) and four 189 deg fisheye
+cameras at 10 Hz, each image stamped with the exact simulation time of its render. A
+supervisor publishes the ground truth (car pose, slots) for training labels and evaluation
+only.
+
+### Odometry
+
+Ackermann dead reckoning from the rear-wheel encoders, with the heading integrated from the
+IMU's gyro (`odometry.py`). Over a 25 m drive with turns and reversing the position error
+stays below 1.8 cm and the heading error below 0.13 deg.
+
+### Bird's-eye view
+
+The four fisheye images are projected onto the ground plane and stitched into one 18 x 18 m
+top-down image at 4 cm per pixel (`bev.py`). The camera model reproduces Webots' spherical
+(equidistant) projection exactly; the rig geometry is defined once (`autopark_sim/rig.py`) and
+used both to build the world and to warp the images, so the calibration is exact by
+construction. A ground point is taken from a camera only if its line of sight clears the car's
+own body (a box model plus per-camera masks measured in a calibration world), and overlapping
+cameras are blended by viewing elevation. Painted lines appear within 6 cm of their true
+position for 99.6 % of pixels at 3-6 m from the car, and 87 % at 6-9 m.
+
+### Slot detector
+
+A marking-point network (`slot_net.py`, 1.65 M parameters) on the bird's-eye view predicts
+where each painted side line meets the aisle: a CenterNet-style heatmap with sub-pixel offset,
+the direction into the slot, and a vacancy map. `slot_codec.py` pairs neighbouring points one
+slot width apart into slots and averages the vacancy over the slot's front part. The heading
+of a slot blends the direction of its painted lines with the normal of the 2.6 m entrance
+segment, weighted towards the normal near the car, where the side lines are short stubs
+partly hidden by the car body; this halves the heading error within 5 m. Inference takes
+42 ms per frame on a laptop CPU.
+
+Training data comes from the simulator with automatic labels: 7 600 views recorded while
+driving along the aisle on randomised weaving paths (`collect_slots.py`), and 5 200 views
+from arbitrary poses (`collect_poses.py`), for which a supervisor service teleports the car
+along ground-truth parking paths, anywhere in the aisle at any heading, and into empty slots,
+keeping the settled suspension so every image is at rest. Train, validation and test sets use
+separate scenarios.
+
+| test views | slots found | entrance error median | heading error p90 |
+|---|---|---|---|
+| driving along the aisle (1 126 images) | 100 % | 1.0 cm | 0.67 deg |
+| car within 20 deg of the aisle (109) | 100 % | 0.9 cm | 0.61 deg |
+| turned 20-45 deg (102) | 99.8 % | 1.2 cm | 0.90 deg |
+| turned more than 45 deg or inside a slot (389) | 99.7 % | 1.6 cm | 1.27 deg |
+
+### Slot tracker
+
+One Kalman filter per slot on the entrance pose (x, y, heading) in the odometry frame
+(`slot_tracker.py`). The measurement noise follows the detector's error as measured against
+range; the prediction adds odometry drift proportional to the distance driven. Detections are
+associated with tracks by a Mahalanobis gate (chi-square, 3 dof, 99.9 %) and linear
+assignment. Tracks are confirmed after 3 hits and only count misses while the slot should be
+visible, so slots are remembered when they leave the view during the manoeuvre. Vacancy is a
+log-odds filter whose weight falls with range, since far-range vacancy calls are unreliable.
+The fused entrance error is 0.8 cm median; even with injected noise of 35 cm median per
+detection it stays at 4.8 cm.
+
+### Planner
+
+Hybrid A* (`hybrid_astar.py`) with Reeds-Shepp shots to the goal (`reeds_shepp.py`: the CSC,
+CCC, CCCC, CCSC and CCSCC families with their symmetries, 44 candidate formulas, verified to
+end exactly on the goal). The planning problem is built from perception only
+(`parking_goal.py`):
+
+- The goal is the rear-axle pose that centres the car in the tracked slot, facing out.
+- A slot is a target only if its fused vacancy exceeds 0.95 from at least 3 close
+  observations. Every other slot is a keep-out box, grown by the worst-case overhang of a
+  parked car measured over 3 000 simulated scenarios (0.25 m towards the aisle, 0.05 m
+  sideways); the band behind each row is keep-out too.
+- Only explored space is drivable: the region the cameras have covered while driving along
+  the aisle, chosen so that an unseen occupied slot can never look free (checked exhaustively
+  in the tests).
+
+The search uses 7 steering angles (minimum turning radius 4.57 m), 0.6 m arcs forward and in
+reverse, and a cost on length, reversing, gear changes and steering. Collision checking keeps
+a 10 cm margin around the car outline in a conservative distance field. On 214 planning
+problems over 50 scenarios every problem was solved, every path was collision-free against the
+true parked cars (min clearance 0.33 m), and the median planning time was 0.14 s.
+
+### Controller
+
+A Stanley path tracker per segment of constant direction (`stanley.py`): at the front axle
+when driving forward, and at the rear axle with per-metre gains when reversing, so that errors
+settle within about 2 m instead of the 5 m that speed-scaled Stanley gains need in reverse. A
+curvature feed-forward follows the arcs; the speed profile slows to a crawl before every gear
+change and every jump in steering (the actuator needs 1.4 s from full left to full right) and
+stops while the steering lags its command; each segment starts with the wheels already turned.
+With the actuator limits and delay modelled, the tracking error stays below 4.7 cm and the
+final error below 1 cm.
+
+### Parking manager
+
+A state machine (`parking_manager_node.py`): **search** (follow the aisle centre line estimated
+from the tracked slots) -> **stop** once a vacant slot has been passed by 3 m -> **plan** ->
+**execute** -> done or failed. Two strategies:
+
+- **Plan once** (`replan:=open`): drive the whole path as planned.
+- **Closed loop** (`replan:=closed`): drive to the first gear change, re-plan there from the
+  latest slot estimate, and on the final reverse move the remaining path with the tracked slot
+  as it updates. If a re-plan fails, the rest of the previous, collision-checked plan is driven
+  as planned; corrections stay within 15 cm of the planned goal.
+
+### Visualizer
+
+`/viz/image` shows the bird's-eye view with each frame's detections, the tracked slots
+(vacant, occupied, target), the planned path (forward and reverse) and the goal, next to a map
+of the manoeuvre and the state of the manager and controller (`visualizer.py`). For the demo
+video, the supervisor also renders a follow camera off-screen.
+
+## Getting started
+
+Requirements: Ubuntu 24.04, ROS 2 Jazzy, Webots R2025a with `webots_ros2`, Python 3.12 with
+PyTorch, OpenCV, SciPy and NumPy < 2. The trained detector is expected at
+`~/autopark_models/slotnet_v2.pt` (train it as below, or pass `model:=<file>`).
+
+```bash
+mkdir -p ~/ws/src && cd ~/ws/src && git clone https://github.com/MHVVD/autopark.git
+cd ~/ws && colcon build --symlink-install && source install/setup.bash
+
+ros2 launch autopark bringup.launch.py seed:=5              # the car finds a vacant slot and parks
+ros2 run rqt_image_view rqt_image_view /viz/image           # the stack's view (second terminal)
+ros2 topic echo /parking/status                             # what the parking manager is doing
+```
+
+Useful launch arguments: `seed` (scenario), `gui:=false` (no 3D window), `mode:=fast`,
+`replan:=open|closed`, `viz:=false`, and injected detection noise for experiments:
+`noise_mode:=white|field noise_pos:=0.10 noise_yaw_deg:=2`.
+
+Tests: `python3 -m pytest -q autopark_sim/test autopark/test` (with ROS sourced).
+
+## Reproducing the results
+
+Data collection needs the simulation running without the parking nodes:
+`ros2 launch autopark bringup.launch.py gui:=false mode:=fast detector:=false tracker:=false planner:=false park:=false`.
+
+```bash
+# slot detector: datasets, training (CPU ~13 min per epoch; also runs on Colab), evaluation
+ros2 run autopark collect_slots --ros-args -p seed_start:=10000 -p seed_count:=150 -p out_dir:=$HOME/autopark_data/slots_v1/train
+ros2 run autopark collect_slots --ros-args -p seed_start:=10150 -p seed_count:=25 -p out_dir:=$HOME/autopark_data/slots_v1/val
+ros2 run autopark collect_slots --ros-args -p seed_start:=0 -p seed_count:=30 -p out_dir:=$HOME/autopark_data/slots_v1/test
+ros2 run autopark collect_poses --ros-args -p seed_start:=10200 -p seed_count:=200 -p out_dir:=$HOME/autopark_data/slots_v2/train
+ros2 run autopark collect_poses --ros-args -p seed_start:=10400 -p seed_count:=30 -p out_dir:=$HOME/autopark_data/slots_v2/val
+ros2 run autopark collect_poses --ros-args -p seed_start:=30 -p seed_count:=40 -p poses_per_seed:=15 -p out_dir:=$HOME/autopark_data/slots_v2/test
+ros2 run autopark train_slots --data ~/autopark_data/slots_v1 --epochs 12 --out ~/autopark_models/slotnet.pt
+ros2 run autopark train_slots --data ~/autopark_data/slots_v1:2,~/autopark_data/slots_v2 --init ~/autopark_models/slotnet.pt --out ~/autopark_models/slotnet_v2.pt --epochs 8 --lr 1e-3
+ros2 run autopark eval_slots --data ~/autopark_data/slots_v2 --split test
+```
+
+**Training on Colab (GPU):** upload `autopark/autopark`, `autopark_sim/autopark_sim` (pure
+Python, no ROS needed) and the dataset, `!pip install opencv-python-headless`, then
+`!PYTHONPATH=. python -m autopark.train_slots --data slots_v1 --out slotnet.pt --workers 2`.
+
+Evaluation tools, all scored against ground truth (`park:=false` for the ones that drive the
+car themselves):
+
+| tool | measures |
 |---|---|
-| 1. Simulation foundation: world, vehicle interface, ground truth, odometry | done |
-| 2. Bird's-eye view (camera calibration, IPM, stitching) | done |
-| 3. Slot detector (dataset from ground truth, PyTorch) | done |
-| 4. Slot tracker (Kalman filter) | done |
-| 5. Planner (Hybrid A* + Reeds-Shepp) | done |
-| 6. Controller (Stanley fwd/rev) + parking manager | done |
-| 7. Experiments, visualisation, demo video, write-up | done |
+| `odom_eval` + `drive_test` | odometry drift along a scripted drive |
+| `bev_eval` | painted lines in the bird's-eye view vs their true positions |
+| `eval_slots` | detector precision, recall and errors by range and viewing angle |
+| `track_eval` | tracker accuracy, consistency and memory while driving past the rows and back |
+| `plan_bench`, `plan_eval` | planner success, clearance and time, offline and on the live stack |
+| `park_eval` | full autonomous runs: success, contact, final pose error, time |
+| `noise_report` | the detection-noise experiment: table, paired statistics, plots |
 
-## Packages
+The noise experiment runs `park_eval` for scenarios 100-111 in each condition, e.g.
 
-- `autopark_msgs`: `ParkingSlot`, `ParkingSlotArray`, `ParkingPath`, `ControlStatus`, `ParkingStatus`,
-  `ResetScenario`, `PlanParking`.
-- `autopark_sim`: Webots world (generated from `lot.py`), vehicle plugin, ground-truth
-  supervisor. Pure geometry/scenario/vehicle maths lives in modules without ROS imports.
-- `autopark`: the autonomy stack (currently odometry) and evaluation tools.
+```bash
+ros2 launch autopark bringup.launch.py gui:=false mode:=fast replan:=closed noise_mode:=field noise_pos:=0.10 noise_yaw_deg:=2
+ros2 run autopark park_eval --ros-args -p use_sim_time:=true -p "seeds:=[100,101,102,103,104,105,106,107,108,109,110,111]" -p label:=closed_field_10 -p out:=$HOME/autopark_results/noise_sweep
+ros2 run autopark noise_report --dir ~/autopark_results/noise_sweep
+```
+
+Demo video: launch with `record:=<dir>` to save the visualizer frames and the follow camera,
+then combine recordings, title cards and plots with `ros2 run autopark make_demo_video`.
+
+## Repository layout
+
+- `autopark_msgs`: messages (`ParkingSlot`, `ParkingSlotArray`, `ParkingPath`,
+  `ControlStatus`, `ParkingStatus`) and services (`ResetScenario`, `SetPose`, `PlanParking`).
+- `autopark_sim`: the Webots world (generated from `lot.py` by `generate_world.py`), scenario
+  generation, the vehicle plugin and the ground-truth supervisor. Geometry, scenario and
+  vehicle maths live in modules without ROS imports.
+- `autopark`: the autonomy stack (one node per box in the diagram), the evaluation tools and
+  the tests.
+- `docs`: the technical write-up and figures.
+
+After changing `lot.py`, `scenario.py` or the cameras, regenerate the world with
+`python3 -m autopark_sim.generate_world worlds` (in `autopark_sim/`).
 
 ## Interfaces
 
@@ -28,254 +260,30 @@ and reverses into it. **Technical write-up with the results: [docs/writeup.md](d
 | `/cmd_ackermann` | ackermann_msgs/AckermannDriveStamped | speed m/s (+fwd), steering rad (+left); rate limited, 0.5 s timeout |
 | `/vehicle/state` | ackermann_msgs/AckermannDriveStamped | speed from rear-wheel encoders, steering from steering joints, 50 Hz |
 | `/imu` | sensor_msgs/Imu | gyro + accelerometer, 50 Hz |
-| `/cam_{front,rear,left,right}/image` | sensor_msgs/Image | 640x640 equidistant fisheye, 189 deg, 10 Hz, stamped with the exact simulation time of the render |
-| `/bev/image` | sensor_msgs/Image | stitched bird's-eye view, 18 x 18 m at 4 cm/px, frame base_footprint |
-| `/slots/detections` | autopark_msgs/ParkingSlotArray | detected slots in base_footprint (entrance, heading, width, occupied, confidence) |
-| `/slots/debug_image` | sensor_msgs/Image | BEV with detections drawn |
-| `/slots/detections_noisy` | autopark_msgs/ParkingSlotArray | detections after optional injected noise (pass-through by default) |
+| `/cam_{front,rear,left,right}/image` | sensor_msgs/Image | 640x640 equidistant fisheye, 189 deg, 10 Hz, stamped with the simulation time of the render |
+| `/odom` + TF odom->base_link | nav_msgs/Odometry | Ackermann dead reckoning, heading from the IMU |
+| `/bev/image` | sensor_msgs/Image | bird's-eye view, 18 x 18 m at 4 cm/px, frame base_footprint |
+| `/slots/detections` | autopark_msgs/ParkingSlotArray | detected slots in base_footprint (entrance, heading, width, vacancy, confidence) |
+| `/slots/detections_noisy` | autopark_msgs/ParkingSlotArray | detections after optional injected noise (pass-through by default); the tracker's input |
 | `/slots/tracked` | autopark_msgs/ParkingSlotArray | confirmed slot tracks in odom: id, entrance, covariance, fused vacancy |
-| `/slots/tracked_image` | sensor_msgs/Image | BEV with the tracks drawn |
-| `/parking/plan` | autopark_msgs/srv/PlanParking | plan into a tracked slot (`slot_id`, -1 = nearest selectable vacant) |
-| `/parking/path` | autopark_msgs/ParkingPath | latest plan (odom): rear-axle poses every 0.1 m, gear and curvature per sample |
-| `/parking/path_viz`, `/parking/path_image` | nav_msgs/Path, sensor_msgs/Image | the plan for RViz, and drawn on the BEV |
-| `/parking/path_exec` | autopark_msgs/ParkingPath | what the controller follows (sent by the parking manager) |
-| `/parking/control_status`, `/parking/status` | ControlStatus, ParkingStatus | controller and parking manager state |
-| `/odom` + TF odom->base_link | nav_msgs/Odometry | Ackermann dead reckoning, heading from IMU (or steering) |
-| `/ground_truth/pose`, `/ground_truth/slots` | Odometry, ParkingSlotArray | evaluation/labels only, never used by the stack |
-| `/ground_truth/reset` | autopark_msgs/srv/ResetScenario | deterministic scenario from a seed |
+| `/parking/plan` | autopark_msgs/srv/PlanParking | plan into a tracked slot (`slot_id`, -1 = nearest vacant) |
+| `/parking/path`, `/parking/path_exec` | autopark_msgs/ParkingPath | the latest plan, and what the controller follows; rear-axle poses every 0.1 m with gear and curvature |
+| `/parking/status`, `/parking/control_status` | ParkingStatus, ControlStatus | parking manager and controller state |
+| `/viz/image` | sensor_msgs/Image | the visualizer |
+| `/ground_truth/pose`, `/ground_truth/slots` | Odometry, ParkingSlotArray | evaluation and labels only, never used by the stack |
+| `/ground_truth/reset`, `/ground_truth/set_pose` | ResetScenario, SetPose | deterministic scenario from a seed; teleport the car (data collection) |
 
 Conventions: `map` frame x along the aisle, y across; `base_link` at the rear-axle centre,
-x forward, y left. All sensor messages are stamped with simulation time.
+x forward, y left. All messages are stamped with simulation time.
 
-## Bird's-eye view
+## Limitations
 
-- Camera rig (poses, intrinsics, projection) is defined once in `autopark_sim/rig.py`; the
-  world generator writes the Webots cameras from it and `autopark/bev.py` uses it for the
-  inverse perspective mapping, so calibration is exact by construction.
-- The fisheye model matches Webots' spherical projection (equidistant: angle from the
-  optical axis = normalised image radius x field of view).
-- A ground point is taken from a camera only if the line of sight clears the own car
-  (`BODY_BOX`) and misses the camera's body mask (`autopark_sim/config/masks`, computed with
-  `ros2 launch autopark_sim sim.launch.py world:=calibration` + `calibrate_masks` +
-  `drive_test`). Overlapping cameras are blended by viewing elevation.
-- BEV pixel (row r, col c): x = x_max - (r + 0.5) res, y = y_max - (c + 0.5) res
-  (top = forward, left = vehicle left), see `BevGrid`.
-- `ros2 run autopark bev_eval` measures how far the painted lines in the BEV are from
-  their ground-truth positions (use `seed:=-1`, an empty lot).
+- Simulation only: perfect calibration, clean painted lines, no weather or lighting changes,
+  one lot layout (perpendicular slots). Only perpendicular reverse-in parking.
+- Obstacles other than parked cars in slots (pedestrians, pillars, a car in the aisle) are not
+  detected; a real system would add a free-space map.
+- Planning and control assume the kinematic bicycle model at parking speed (below 1 m/s).
 
-## Slot detector
+## License
 
-Marking-point approach: the network (`slot_net.py`, 1.6 M parameters, input 448x448 BEV,
-output stride 4) predicts where each painted side line ends at the aisle (heatmap + sub-cell
-offset), the direction into the slot, and a vacancy map. `slot_codec.py` pairs neighbouring
-points one slot width apart into slots and averages the vacancy over the slot entrance.
-
-```bash
-# 1. dataset (simulation running: ros2 launch autopark bringup.launch.py gui:=false mode:=fast detector:=false)
-ros2 run autopark collect_slots --ros-args -p seed_start:=10000 -p seed_count:=150 -p out_dir:=$HOME/autopark_data/slots_v1/train
-ros2 run autopark collect_slots --ros-args -p seed_start:=10150 -p seed_count:=25 -p out_dir:=$HOME/autopark_data/slots_v1/val
-ros2 run autopark collect_slots --ros-args -p seed_start:=0 -p seed_count:=30 -p out_dir:=$HOME/autopark_data/slots_v1/test
-# 2. train (CPU: ~11 min/epoch on the i5-8265U) and 3. evaluate on the test scenarios
-ros2 run autopark train_slots --data ~/autopark_data/slots_v1 --epochs 12
-ros2 run autopark eval_slots --split test
-```
-
-Seeds >= 10000 are dataset scenarios with 3-10 empty slots (balanced vacancy labels); the
-test split uses the normal 1-3-empty scenarios. The splits never share a scenario.
-
-**Views while parking (slots_v2, `slotnet_v2.pt`, the default).** `collect_slots` only drives
-along the aisle, so the first model (`slotnet.pt`) found no slot once the car turned more than
-45 deg (0 % recall). `collect_poses` teleports the car (`/ground_truth/set_pose`, keeping the
-settled suspension so every image is at rest) to poses along ground-truth parking paths,
-anywhere in the aisle at any heading, and inside empty slots, and saves the BEV:
-
-```bash
-# simulation running: ros2 launch autopark bringup.launch.py gui:=false mode:=fast detector:=false tracker:=false planner:=false park:=false
-ros2 run autopark collect_poses --ros-args -p seed_start:=10200 -p seed_count:=200 -p out_dir:=$HOME/autopark_data/slots_v2/train
-ros2 run autopark collect_poses --ros-args -p seed_start:=10400 -p seed_count:=30 -p out_dir:=$HOME/autopark_data/slots_v2/val
-ros2 run autopark collect_poses --ros-args -p seed_start:=30 -p seed_count:=40 -p poses_per_seed:=15 -p out_dir:=$HOME/autopark_data/slots_v2/test
-# fine-tune from slotnet.pt on every 2nd slots_v1 image + slots_v2 (8 epochs, ~13.5 min each on CPU)
-ros2 run autopark train_slots --data ~/autopark_data/slots_v1:2,~/autopark_data/slots_v2 --init ~/autopark_models/slotnet.pt --out ~/autopark_models/slotnet_v2.pt --epochs 8 --lr 1e-3
-ros2 run autopark eval_slots --data ~/autopark_data/slots_v2 --split test
-```
-
-Slot recall / heading error p90 on the slots_v2 test set (600 images, scenarios 30-69), by
-the car's heading relative to the aisle:
-
-| heading vs aisle | images | slotnet.pt | slotnet_v2.pt |
-|---|---|---|---|
-| 0-20 deg | 109 | 99.9 % / 0.76 deg | 100.0 % / 0.61 deg |
-| 20-45 deg | 102 | 70.2 % / 5.74 deg | 99.8 % / 0.90 deg |
-| 45-90 deg (turned, in a slot) | 389 | 0.0 % | 99.7 % / 1.27 deg |
-
-On the aisle test set (slots_v1) slotnet_v2 is as good as before (100 % recall and precision,
-entrance error 1.0 cm median, heading 0.23 deg median). The slot heading blends the painted
-lines' direction with the normal of the 2.6 m entrance segment, weighted towards the normal
-near the car (`slot_codec.blend_heading`): near the car the side lines are short stubs,
-partly under the car body. This halved the heading error within 5 m and was what made the
-closed loop work (see below). Per-frame "vacant" calls of turned views are less precise (79 %
-at the 0.5 threshold), but the wrong ones are far away: 1 of 459 within 4 m, and 4 of 763
-above 0.95 (the tracker needs a fused vacancy > 0.95 and discounts far-range vacancy).
-
-**Training on Colab (GPU):** upload `autopark/autopark` and `autopark_sim/autopark_sim`
-(pure Python, no ROS needed) and the dataset folder, then
-`!pip install opencv-python-headless` and
-`!PYTHONPATH=. python -m autopark.train_slots --data slots_v1 --out slotnet.pt --workers 2`.
-Copy `slotnet.pt` back to `~/autopark_models/`.
-
-## Slot tracker
-
-One Kalman filter per slot on the entrance pose (x, y, heading) in the odom frame
-(`slot_tracker.py`). The measurement noise is the detector's error measured against range
-(0.5 cm + 0.25 cm/m, 0.3 deg + 0.04 deg/m) plus any injected noise; prediction adds odometry
-drift proportional to the distance driven. Association: Mahalanobis gate (chi2, 3 dof, 99.9 %)
-+ linear assignment. Tracks are confirmed after 3 hits and only accumulate misses while the
-slot is predicted to be inside the detector's view, so slots are remembered when they leave
-the view during a manoeuvre. Vacancy is a log-odds filter whose weight falls with range
-(far-range vacancy is unreliable, see milestone 3).
-
-`ros2 run autopark track_eval` drives past the rows and back (using ground truth to steer)
-and scores detections and tracks against ground truth in the car frame. Detection noise for
-experiments: `ros2 launch autopark bringup.launch.py noise_pos:=0.2 noise_yaw_deg:=4
-noise_dropout:=0.2 noise_false:=0.3`.
-
-Camera timing: the vehicle plugin publishes the camera images itself, stamped with the
-simulation time of the render. webots_ros2's own camera publisher stamps with a ROS clock fed
-by /clock from another process; measured per frame, its stamps lagged the render by one step
-88 % of the time and by 0 or 2 steps otherwise (2-3 cm of error at 1.2 m/s).
-
-## Planner
-
-Hybrid A* (`hybrid_astar.py`) with Reeds-Shepp analytic expansion (`reeds_shepp.py`: the
-CSC, CCC, CCCC, CCSC and CCSCC families with their symmetries, 44 candidate formulas as in
-OMPL; verified: every candidate ends exactly on the goal, distances are symmetric and satisfy
-the triangle inequality on random poses).
-
-- Planning problem (`parking_goal.py`), built only from perception: the goal is the rear-axle
-  pose that centres the car in the tracked slot, facing out (reverse-in). Every tracked slot
-  that is not selectable-vacant (vacancy > 0.95 and >= 3 close observations) is a keep-out
-  box, grown 0.25 m towards the aisle and 0.05 m sideways to bound a car parked in it (worst
-  case in 3000 simulated scenarios: 0.20 m and 0.03 m); the band behind each row is keep-out.
-  Only explored space is drivable: the planner node records the odometry pose every metre while
-  the car heads along the aisle, and the explored area is the union of a car-frame box
-  (-3.5..5.5 m along, +-9 m across) at those poses. The box is chosen so that every slot
-  reaching into it had its entrance in the tracker's view (checked exhaustively in the tests),
-  so an unseen occupied slot can never look free. Obstacles that are not parked cars in slots
-  (pedestrians, pillars) are not modelled: a real system would add a free-space map.
-- Search: 7 steering angles (|steer| <= 0.55 rad of the 0.6 rad actuator limit, min turning
-  radius 4.57 m), forward and reverse arcs of 0.6 m, 0.25 m / 5 deg pruning grid. Cost:
-  length (reverse x1.5) + 3 m per gear change + steering penalties. Heuristic: max(obstacle
-  aware 2D distance, obstacle-free Reeds-Shepp distance), weight 2. Pieces between gear
-  changes are at least 0.5 m.
-- Collision check: points every 5 cm on the car outline need clearance >= 10 cm margin in a
-  2.5 cm distance field that is made conservative for its resolution; tests check it against
-  exact polygon geometry.
-
-`ros2 run autopark plan_bench` benchmarks the planner offline on ground-truth scenarios and
-checks every path with exact geometry against the true parked-car rectangles.
-`ros2 run autopark plan_eval` does the same on the live stack (perception + planner).
-
-Results (milestone 5):
-- Offline, 50 scenarios, 214 problems (start 3 m before to 8 m past the slot): 214 solved,
-  all collision-free against the true cars (min clearance 0.33 m), kinematically feasible
-  and ending inside the slot; planning time median 0.14 s, p90 0.97 s, max 2.5 s (laptop CPU);
-  0-3 gear changes.
-- Slot pose errors given to the planner (independent per slot): 5 cm / 0.5 deg: 104 / 107
-  solved, all safe; 15 cm / 2 deg: 56 solved; 30 cm / 6 deg (a single raw detection at the
-  highest noise level): 35 solved, one touching a car, only 12 ending inside the slot.
-- Live (8 scenarios, full perception stack, planning at two stops): every request for a slot
-  the car had passed was solved (36 / 36), all collision-free against the true cars (min
-  0.39 m) and ending inside the true slot (car within 4.6 cm lateral, 2.8 cm depth, 0.5 deg
-  of the slot centre). Slots still ahead of the car are refused (outside the explored area);
-  planning time median 2.0 s, max 7.4 s with the simulation and perception on the same CPU.
-
-## Controller and parking manager
-
-`stanley.py`: path tracking per segment of constant direction. Forward: Stanley at the front
-axle (lateral error measured across the front axle's direction of travel, yaw + steering).
-Reverse: the same heading + cross-track structure at the rear axle with gains per metre
-(error dynamics e'' + 2 e' + e = 0 per metre; Stanley's speed-scaled gains at the rear axle
-settle over ~5 m when reversing, too slow for a parking slot). Curvature feedforward. The
-speed profile brakes to creep speed before every cusp and every steering jump in the path
-(planned paths switch between full-lock arcs and the steering actuator needs ~1.4 s for
-that), and slows to a stop while the steering lags its command. Each segment starts with the
-wheels turned at standstill. In a kinematic model with the actuator limits and 60 ms delay
-(`kinematic_sim.py`), on 31 planned manoeuvres: max tracking error 4.7 cm, final error < 1 cm.
-
-`parking_manager_node.py`: search (follows the aisle centre estimated from the tracked slots)
--> stop once a selectable-vacant slot has been passed by 3 m -> plan -> execute -> done / failed.
-`replan:=closed` sends the path up to the first cusp, replans at each cusp (standing) with the
-latest slot estimate, and on the final reverse moves the remaining path rigidly with the goal
-when the tracked slot moves (1 cm .. 25 cm). `replan:=open` plans once and executes the whole
-path. `ros2 run autopark park_eval` scores autonomous runs against ground truth.
-
-Results (milestone 6, 8 scenarios per mode, full stack in Webots, scored against ground truth):
-
-| | plan once (`open`) | closed loop (`closed`) |
-|---|---|---|
-| parked, no contact | 8 / 8 | 8 / 8 |
-| min clearance to parked cars | 0.50 m | 0.51 m |
-| final lateral error (median / max) | 1.1 / 2.7 cm | 1.1 / 3.2 cm |
-| final depth error (median / max) | 2.4 / 3.0 cm | 1.4 / 1.7 cm |
-| final heading error (median / max) | 0.35 / 0.75 deg | 0.58 / 1.37 deg |
-| time from start of search (median) | 45 s | 47 s |
-
-The first detector only worked on views from the aisle, so in the runs above the tracker used
-detections only within 20 deg of the trained view angle, and during the final reverse (car at
-~90 deg) there was no new information: closed loop ~ plan once. With `slotnet_v2.pt` (trained
-on turned, mid-manoeuvre and in-slot views, see *Slot detector*) the tracker uses every view
-(`view_yaw_tol:=90`, the default). Same 8 scenarios:
-
-| slotnet_v2, blended heading | plan once (`open`) | closed loop (`closed`) |
-|---|---|---|
-| parked, no contact | 8 / 8 | 8 / 8 |
-| min clearance to parked cars | 0.49 m | 0.50 m |
-| final lateral error (median / max) | 1.4 / 4.4 cm | 1.4 / 2.5 cm |
-| final depth error (median / max) | 1.5 / 2.9 cm | 0.2 / 0.5 cm |
-| final heading error (median / max) | 0.72 / 1.04 deg | 0.31 / 0.97 deg |
-| time from start of search (median) | 43 s | 47 s |
-
-Closed loop now corrects the final reverse with what the cameras see from inside the slot
-(34-46 corrections per run). Before the heading blend (line direction only) it was worse than
-plan once: lateral median 4.3 / max 12.2 cm. A trace of the goal the controller steered to
-showed its lateral error swinging from +9 to -10 cm, in step with the heading estimate (4 m
-from the entrance to the goal: 1 deg ~ 7 cm); per-frame positions, stamps and odometry were
-all accurate. Old configuration: `model:=$HOME/autopark_models/slotnet.pt view_yaw_tol:=20`.
-
-## Visualizer, demo video, experiment
-
-`ros2 launch autopark bringup.launch.py` also starts the visualizer (`viz:=false` to skip):
-`/viz/image` shows the bird's-eye view with this frame's detections, the tracked slots, the
-path and the goal, next to a map of the manoeuvre and the manager / controller state.
-`record:=<dir>` saves its frames plus a 1280x720 view of the car from the supervisor's demo
-camera (renders off-screen, works with `gui:=false`); `ros2 run autopark make_demo_video`
-turns recordings, title cards and plots into an mp4.
-
-Detection-noise experiment (plan once vs closed loop; `noise_mode:=white|field`, see
-`detection_noise.py`): run `park_eval` per condition into one directory, then
-`ros2 run autopark noise_report --dir <dir>` writes the table, paired statistics and plots.
-Results and discussion: [docs/writeup.md](docs/writeup.md), section 4.
-
-![Parking accuracy vs detection noise](docs/figures/corner_error.png)
-
-## Run
-
-```bash
-cd ~/p_WS && colcon build --symlink-install && source install/setup.bash
-ros2 launch autopark bringup.launch.py seed:=5     # the car finds a vacant slot and parks (gui:=false: no 3D view)
-ros2 topic echo /parking/status                    # what the parking manager is doing
-# the evaluation tools that drive the car need park:=false:
-ros2 launch autopark bringup.launch.py park:=false
-ros2 run autopark odom_eval --ros-args -p duration:=28.0   # terminal 2
-ros2 run autopark drive_test                               # terminal 3
-ros2 service call /ground_truth/reset autopark_msgs/srv/ResetScenario "{seed: 5}"
-ros2 run rqt_image_view rqt_image_view /bev/image      # view the bird's-eye view
-ros2 service call /parking/plan autopark_msgs/srv/PlanParking "{slot_id: -1}"   # plan into the nearest vacant slot
-ros2 run rqt_image_view rqt_image_view /parking/path_image                      # view the plan
-ros2 run rqt_image_view rqt_image_view /viz/image                               # everything in one view
-```
-
-Tests: `python3 -m pytest -q autopark_sim/test autopark/test` (with ROS sourced).
-
-After changing `lot.py`, `scenario.py` or the cameras, regenerate the world:
-`python3 -m autopark_sim.generate_world worlds` (run in `autopark_sim/`).
+MIT, see [LICENSE](LICENSE).
