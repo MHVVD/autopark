@@ -19,6 +19,9 @@ Args (passed through to autopark_sim/sim.launch.py): seed, gui, mode
   park            true | false     run the controller + parking manager: the car      default true
                                    searches for a vacant slot and parks by itself
                                    (use park:=false for the evaluation tools that drive)
+  viz             true | false     run the visualizer: /viz/image                     default true
+  record          directory        record /viz/image frames and the Webots 3D view     default ''
+                                   (gui:=true) for make_demo_video
   replan          closed | open    closed: replan at cusps and correct the final       default closed
                                    approach with the slot estimate; open: plan once
 The tracker always reads /slots/detections_noisy (a pass-through when all noise is 0) and is
@@ -73,6 +76,10 @@ def generate_launch_description():
     planner = Node(package='autopark', executable='planner', output='screen',
                    parameters=[{'use_sim_time': True}],
                    condition=IfCondition(LaunchConfiguration('planner')))
+    visualizer = Node(package='autopark', executable='visualizer', output='screen',
+                      parameters=[{'use_sim_time': True, 'mode': LaunchConfiguration('replan'),
+                                   'record_dir': LaunchConfiguration('record')}],
+                      condition=IfCondition(LaunchConfiguration('viz')))
     controller = Node(package='autopark', executable='controller', output='screen',
                       parameters=[{'use_sim_time': True}],
                       condition=IfCondition(LaunchConfiguration('park')))
@@ -90,6 +97,9 @@ def generate_launch_description():
         DeclareLaunchArgument('tracker', default_value='true'),
         DeclareLaunchArgument('view_yaw_tol', default_value='90.0',
                               description='deg from perpendicular within which the tracker uses detections'),
+        DeclareLaunchArgument('viz', default_value='true', description='run the visualizer (/viz/image)'),
+        DeclareLaunchArgument('record', default_value='',
+                              description='directory: record the visualizer and the 3D view (needs gui:=true)'),
         DeclareLaunchArgument('noise_pos', default_value='0.0'),
         DeclareLaunchArgument('noise_mode', default_value='white',
                               description='white: independent per frame; field: systematic, viewpoint-dependent'),
@@ -109,4 +119,5 @@ def generate_launch_description():
         planner,
         controller,
         manager,
+        visualizer,
     ])

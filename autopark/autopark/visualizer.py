@@ -1,7 +1,7 @@
 """Visualizer: one live image of the whole stack, /viz/image (for the demo video and debugging).
 
 Left, the bird's-eye view (car frame, x forward = up) with
-  yellow arrows   raw detections of this frame (entrance + heading)
+  yellow arrows   this frame's detections as the tracker gets them (after any injected noise)
   green / red     tracked slots: selectable vacant / not (fused estimate, odom -> car frame)
   cyan, thick     the target slot
   blue / orange   the planned path, forward / reverse (the part being executed is bold)
@@ -10,8 +10,9 @@ Right, a map of the manoeuvre in the odom frame (tracked slots, the car's trail,
 the car) and the state of the parking manager and the controller.
 
 With `record_dir` set, every image is also saved as <record_dir>/viz/<t_ms>.jpg with an index
-(time, manager state) and the supervisor is asked to save the Webots 3D view to
-<record_dir>/3d (needs gui:=true); make_demo_video combines them.
+(time, manager state), and the supervisor saves a view of the car from its demo camera to
+<record_dir>/3d/<t_ms>.jpg until 3 s after the parking manager is done; make_demo_video
+combines them.
 Only uses what the stack itself publishes (no ground truth).
 """
 import math
@@ -192,7 +193,7 @@ def main():
             latched = QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE,
                                  durability=DurabilityPolicy.TRANSIENT_LOCAL)
             self.create_subscription(Image, '/bev/image', self.on_bev, 2)
-            self.create_subscription(ParkingSlotArray, '/slots/detections', self.on_dets, 5)
+            self.create_subscription(ParkingSlotArray, '/slots/detections_noisy', self.on_dets, 5)
             self.create_subscription(ParkingSlotArray, '/slots/tracked', self.on_tracks, 5)
             self.create_subscription(ParkingPath, '/parking/path', self.on_path, latched)
             self.create_subscription(ParkingPath, '/parking/path_exec', self.on_exec, 10)
@@ -208,7 +209,8 @@ def main():
                 self.index = open(os.path.join(self.record_dir, 'viz', 'index.csv'), 'a')
                 self.rec_pub = self.create_publisher(String, '/demo/record', 10)
                 self.create_timer(1.0, self.start_3d)
-                self.started_3d = False
+            self.started_3d = self.stopped_3d = False
+            self.t_end = None
 
         def start_3d(self):
             if not self.started_3d and self.rec_pub.get_subscription_count() > 0:
@@ -217,6 +219,10 @@ def main():
 
         def on_reset(self, _m):
             self.trail, self.tracks, self.path, self.exec, self.dets = [], [], None, None, []
+            self.status = self.control = None
+            self.t_end = None
+            if self.index is not None and self.odom:
+                self.index.write(f'{max(self.odom)},reset\n')     # make_demo_video starts after the last reset
 
         def on_vehicle(self, m):
             self.speed, self.steer = m.drive.speed, m.drive.steering_angle
@@ -264,6 +270,12 @@ def main():
             out = self.bridge.cv2_to_imgmsg(img, 'bgr8')
             out.header = m.header
             self.pub.publish(out)
+            if self.started_3d and not self.stopped_3d:
+                if state in ('done', 'failed'):
+                    self.t_end = self.t_end or t
+                    if t - self.t_end > 3000:
+                        self.rec_pub.publish(String(data=''))
+                        self.stopped_3d = True
             if self.index is not None:
                 cv2.imwrite(os.path.join(self.record_dir, 'viz', f'{t:08d}.jpg'), img, [cv2.IMWRITE_JPEG_QUALITY, 90])
                 self.index.write(f'{t},{state}\n')
@@ -276,7 +288,7 @@ def main():
     except KeyboardInterrupt:
         pass
     finally:
-        if node.record_dir and node.started_3d:
+        if node.record_dir and node.started_3d and not node.stopped_3d:
             node.rec_pub.publish(String(data=''))
         node.destroy_node()
         rclpy.try_shutdown()

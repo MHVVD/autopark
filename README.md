@@ -1,7 +1,7 @@
 # autopark: vision-based autonomous parking (Webots + ROS 2 Jazzy)
 
 A simulated car drives past a row of parking slots, detects an empty slot with its cameras
-and reverses into it. Work in progress, built milestone by milestone.
+and reverses into it. **Technical write-up with the results: [docs/writeup.md](docs/writeup.md).**
 
 | Milestone | Status |
 |---|---|
@@ -11,7 +11,7 @@ and reverses into it. Work in progress, built milestone by milestone.
 | 4. Slot tracker (Kalman filter) | done |
 | 5. Planner (Hybrid A* + Reeds-Shepp) | done |
 | 6. Controller (Stanley fwd/rev) + parking manager | done |
-| 7. Experiments, visualisation, write-up | next |
+| 7. Experiments, visualisation, demo video, write-up | done |
 
 ## Packages
 
@@ -242,6 +242,22 @@ showed its lateral error swinging from +9 to -10 cm, in step with the heading es
 from the entrance to the goal: 1 deg ~ 7 cm); per-frame positions, stamps and odometry were
 all accurate. Old configuration: `model:=$HOME/autopark_models/slotnet.pt view_yaw_tol:=20`.
 
+## Visualizer, demo video, experiment
+
+`ros2 launch autopark bringup.launch.py` also starts the visualizer (`viz:=false` to skip):
+`/viz/image` shows the bird's-eye view with this frame's detections, the tracked slots, the
+path and the goal, next to a map of the manoeuvre and the manager / controller state.
+`record:=<dir>` saves its frames plus a 1280x720 view of the car from the supervisor's demo
+camera (renders off-screen, works with `gui:=false`); `ros2 run autopark make_demo_video`
+turns recordings, title cards and plots into an mp4.
+
+Detection-noise experiment (plan once vs closed loop; `noise_mode:=white|field`, see
+`detection_noise.py`): run `park_eval` per condition into one directory, then
+`ros2 run autopark noise_report --dir <dir>` writes the table, paired statistics and plots.
+Results and discussion: [docs/writeup.md](docs/writeup.md), section 4.
+
+![Parking accuracy vs detection noise](docs/figures/corner_error.png)
+
 ## Run
 
 ```bash
@@ -256,6 +272,7 @@ ros2 service call /ground_truth/reset autopark_msgs/srv/ResetScenario "{seed: 5}
 ros2 run rqt_image_view rqt_image_view /bev/image      # view the bird's-eye view
 ros2 service call /parking/plan autopark_msgs/srv/PlanParking "{slot_id: -1}"   # plan into the nearest vacant slot
 ros2 run rqt_image_view rqt_image_view /parking/path_image                      # view the plan
+ros2 run rqt_image_view rqt_image_view /viz/image                               # everything in one view
 ```
 
 Tests: `python3 -m pytest -q autopark_sim/test autopark/test` (with ROS sourced).
