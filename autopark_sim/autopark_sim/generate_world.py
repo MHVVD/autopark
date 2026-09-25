@@ -99,6 +99,12 @@ DEF GT_SUPERVISOR Robot {{
   name "gt_supervisor"
   controller "<extern>"
   supervisor TRUE
+  children [
+    DEF DEMO_CAM Pose {{
+      translation 0 0 -20
+      children [ Camera {{ name "demo_cam" width 1280 height 720 fieldOfView 0.9 near 0.1 far 100 }} ]
+    }}
+  ]
 }}
 DEF EGO ToyotaPrius {{
   translation {ex:.4f} {ey:.4f} {EGO_Z}

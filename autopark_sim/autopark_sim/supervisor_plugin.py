@@ -12,15 +12,20 @@ Services
   /ground_truth/set_pose autopark_msgs/SetPose      teleport the ego car, same scenario
                                                    (data collection only; no /scenario/reset)
 Subscribes
-  /demo/record         std_msgs/String             directory: save the 3D view every 100 ms of
-                                                   simulated time as <dir>/<t_ms>.jpg, with the
-                                                   viewpoint following the ego car ('' stops).
-                                                   Needs the GUI (gui:=true), for the demo video.
+  /demo/record         std_msgs/String             directory: save a 1280x720 view of the ego car
+                                                   every 100 ms of simulated time as <dir>/<t_ms>.jpg
+                                                   ('' stops), for the demo video. The view is the
+                                                   supervisor's own camera (demo_cam), moved each step
+                                                   to follow the car, so it renders off-screen
+                                                   (works with gui:=false) without GUI overlays.
 
 <plugin> property: seed (scenario applied at start-up, default 0).
 """
 import math
 import os
+
+import cv2
+import numpy as np
 
 import rclpy
 from autopark_msgs.msg import ParkingSlot, ParkingSlotArray
@@ -34,7 +39,8 @@ from autopark_sim.scenario import EGO_Z, make_scenario
 
 SLOTS_PERIOD = 0.5  # s
 RECORD_PERIOD_MS = 100
-DEMO_VIEW = [-4.0, -19.0, 12.0]   # m, fixed camera position; it pans and tilts to follow the car
+DEMO_OFFSET = (-5.0, -11.0, 8.0)   # m, demo camera position relative to the car (map axes)
+DEMO_SMOOTH = 0.05                 # per step: the camera position follows the car smoothly
 
 
 def _stamp(msg, t):
@@ -96,7 +102,9 @@ class GroundTruthSupervisor:
         self.__node.create_service(ResetScenario, '/ground_truth/reset', self.__on_reset)
         self.__node.create_service(SetPose, '/ground_truth/set_pose', self.__on_set_pose)
         self.__node.create_subscription(String, '/demo/record', self.__on_record, 10)
-        self.__record_dir = ''
+        self.__record_dir, self.__record_n, self.__cam_pos = '', 0, None
+        self.__demo_cam = self.__sup.getDevice('demo_cam')
+        self.__demo_pose = self.__sup.getFromDef('DEMO_CAM')
 
         self.__apply(int(properties.get('seed', 0)))
 
@@ -138,26 +146,46 @@ class GroundTruthSupervisor:
         return response
 
     def __on_record(self, msg):
-        self.__record_dir = msg.data
         if not msg.data:
-            self.__node.get_logger().info('demo recording stopped')
+            if self.__record_dir:
+                self.__demo_cam.disable()
+                self.__demo_pose.getField('translation').setSFVec3f([0.0, 0.0, -20.0])
+                self.__node.get_logger().info(f'demo recording stopped ({self.__record_n} frames)')
+            self.__record_dir = ''
+            return
+        if self.__record_dir or self.__demo_cam is None:
             return
         os.makedirs(msg.data, exist_ok=True)
-        children = self.__sup.getRoot().getField('children')
-        for i in range(children.getCount()):
-            n = children.getMFNode(i)
-            if n.getTypeName() == 'Viewpoint':
-                n.getField('follow').setSFString('ego_car')
-                n.getField('followType').setSFString('Pan and Tilt Shot')
-                n.getField('position').setSFVec3f(DEMO_VIEW)
+        self.__record_dir, self.__record_n, self.__cam_pos = msg.data, 0, None
+        self.__demo_cam.enable(RECORD_PERIOD_MS)
         self.__node.get_logger().info(f'demo recording to {msg.data}')
+
+    def __move_demo_cam(self, car):
+        """Put the demo camera behind and above the car (smoothed) and aim it at the car."""
+        target = [car[0] + DEMO_OFFSET[0], car[1] + DEMO_OFFSET[1], DEMO_OFFSET[2]]
+        if self.__cam_pos is None:
+            self.__cam_pos = target
+        self.__cam_pos = [c + DEMO_SMOOTH * (t - c) for c, t in zip(self.__cam_pos, target)]
+        dx, dy, dz = car[0] - self.__cam_pos[0], car[1] - self.__cam_pos[1], 0.5 - self.__cam_pos[2]
+        yaw, pitch = math.atan2(dy, dx), math.atan2(-dz, math.hypot(dx, dy))   # pitch > 0: down
+        cy, sy, cp, sp = math.cos(yaw), math.sin(yaw), math.cos(pitch), math.sin(pitch)
+        r = [cy * cp, -sy, cy * sp, sy * cp, cy, sy * sp, -sp, 0.0, cp]        # Rz(yaw) Ry(pitch)
+        self.__demo_pose.getField('translation').setSFVec3f(self.__cam_pos)
+        self.__demo_pose.getField('rotation').setSFRotation(_axis_angle(r))
 
     def step(self):
         rclpy.spin_once(self.__node, timeout_sec=0)
         t = self.__sup.getTime()
-        t_ms = int(round(t * 1000))
-        if self.__record_dir and t_ms % RECORD_PERIOD_MS == 0:
-            self.__sup.exportImage(os.path.join(self.__record_dir, f'{t_ms:08d}.jpg'), 90)
+        if self.__record_dir:
+            self.__move_demo_cam(self.__ego.getPosition())
+            t_ms = int(round(t * 1000))
+            if t_ms % RECORD_PERIOD_MS == 0 and t_ms > 0:
+                img = self.__demo_cam.getImage()
+                if img:
+                    w, h = self.__demo_cam.getWidth(), self.__demo_cam.getHeight()
+                    bgr = np.frombuffer(img, np.uint8).reshape(h, w, 4)[:, :, :3]
+                    cv2.imwrite(os.path.join(self.__record_dir, f'{t_ms:08d}.jpg'), bgr, [cv2.IMWRITE_JPEG_QUALITY, 90])
+                    self.__record_n += 1
 
         pos = self.__ego.getPosition()
         rot = self.__ego.getOrientation()

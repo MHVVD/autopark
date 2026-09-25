@@ -180,11 +180,14 @@ def plots(runs, levels, kinds, out):
     fig.tight_layout()
     fig.savefig(os.path.join(out, 'corner_error.png'), dpi=130)
 
-    fig, axs = plt.subplots(1, 2, figsize=(11, 3.6), sharey=True)
+    fig, axs = plt.subplots(1, 2, figsize=(11, 4.0), sharey=True)
+    present = [oc for oc in ('parked', 'refused', 'contact', 'other')
+               if any(outcome(r) == oc for m in runs.values() for rs in m.values() for r in rs)]
     for ax, kind in zip(axs, kinds):
         for k, mode in enumerate(('open', 'closed')):
             bottoms = np.zeros(len(levels))
-            for oc, shade in (('parked', 1.0), ('refused', 0.45), ('contact', 0.15), ('other', 0.3)):
+            for oc, shade in ((o, sh) for o, sh in (('parked', 1.0), ('refused', 0.4), ('contact', 0.15), ('other', 0.25))
+                              if o in present):
                 vals = []
                 for lv in levels:
                     rs = runs.get((kind, lv), {}).get(mode, [])
@@ -198,8 +201,9 @@ def plots(runs, levels, kinds, out):
         ax.set_xticks(levels)
         ax.set_xlabel('position noise std (cm)')
     axs[0].set_ylabel('% of runs')
-    axs[0].legend(fontsize=7, ncol=2, loc='lower left')
-    fig.tight_layout()
+    fig.legend(*axs[0].get_legend_handles_labels(), loc='upper center', ncol=2 * len(present), fontsize=8,
+               frameon=False)
+    fig.tight_layout(rect=(0, 0, 1, 0.9))
     fig.savefig(os.path.join(out, 'success.png'), dpi=130)
 
     fig, axs = plt.subplots(2, 3, figsize=(12, 6.5), sharex=True)
