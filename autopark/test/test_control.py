@@ -168,3 +168,10 @@ def test_remainder_continues_after_the_first_segment():
     assert not last
     assert len(part.x) + len(rest.x) == len(path.x)
     assert rest.x[-1] == path.x[-1] and rest.direction[0] != part.direction[-1]
+
+
+def test_correction_size_counts_translation_and_rotation():
+    g = (1.0, 2.0, 0.5)
+    assert pm.correction_size(g, g) == 0.0
+    assert abs(pm.correction_size(g, (1.03, 2.04, 0.5)) - 0.05) < 1e-9
+    assert abs(pm.correction_size(g, (1.0, 2.0, 0.5 + math.radians(1))) - 2 * math.radians(1)) < 1e-9

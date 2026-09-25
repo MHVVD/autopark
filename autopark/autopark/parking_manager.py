@@ -83,6 +83,13 @@ def rigid_correction(goal_old, goal_new):
     return goal_new[0] - goal_old[0], goal_new[1] - goal_old[1], pg_wrap(goal_new[2] - goal_old[2])
 
 
+def correction_size(goal_old, goal_new, lever=2.0):
+    """Size (m) of the correction goal_old -> goal_new: translation + lever * |rotation|
+    (1 deg ~ 3.5 cm at 2 m)."""
+    dx, dy, dth = rigid_correction(goal_old, goal_new)
+    return math.hypot(dx, dy) + lever * abs(dth)
+
+
 def apply_correction(path, goal_old, corr):
     """Move path samples rigidly: rotate by dyaw about goal_old, then translate by (dx, dy).
     Curvature and direction are unchanged."""
